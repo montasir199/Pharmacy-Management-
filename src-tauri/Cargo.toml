@@ -13,6 +13,7 @@ tauri-build = { version = "2", features = [] }
 tauri = { version = "2", features = [] }
 rusqlite = { version = "0.41", features = ["backup", "bundled"] }
 rusqlite_migration = "2.7"
+serde = { version = "1", features = ["derive"] }
 thiserror = "2"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["fmt"] }

@@ -25,7 +25,10 @@ pub enum DatabaseError {
 }
 
 fn migrations() -> Migrations<'static> {
-    Migrations::new(vec![M::up(include_str!("../migrations/0001_core.sql"))])
+    Migrations::new(vec![
+        M::up(include_str!("../migrations/0001_core.sql")),
+        M::up(include_str!("../migrations/0002_inventory.sql")),
+    ])
 }
 
 pub fn initialize(app_data_dir: &Path) -> Result<Connection, DatabaseError> {
@@ -134,7 +137,10 @@ mod tests {
     fn backs_up_an_existing_database_before_migrating_and_only_once() {
         let directory = tempfile::tempdir().expect("create temporary data directory");
         let database_path = directory.path().join(DATABASE_FILE);
-        let legacy = Connection::open(&database_path).expect("create existing database");
+        let mut legacy = Connection::open(&database_path).expect("create existing database");
+        migrations()
+            .to_version(&mut legacy, 1)
+            .expect("create phase-three schema");
         legacy
             .execute_batch("CREATE TABLE legacy_marker (value TEXT);")
             .expect("create legacy marker");
@@ -163,15 +169,15 @@ mod tests {
                 |row| row.get(0),
             )
             .expect("check original table in backup");
-        let migrated_table_exists: bool = backup
+        let inventory_table_exists: bool = backup
             .query_row(
-                "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'currencies')",
+                "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'products')",
                 [],
                 |row| row.get(0),
             )
             .expect("check migration was not applied to backup");
         assert!(legacy_table_exists);
-        assert!(!migrated_table_exists);
+        assert!(!inventory_table_exists);
 
         initialize(directory.path()).expect("reopen migrated database");
         let backup_count = fs::read_dir(directory.path())
@@ -193,7 +199,7 @@ mod tests {
         let connection =
             Connection::open(directory.path().join(DATABASE_FILE)).expect("create database file");
         connection
-            .pragma_update(None, "user_version", 2)
+            .pragma_update(None, "user_version", 3)
             .expect("set future schema version");
         drop(connection);
 
