@@ -1,6 +1,6 @@
 {
   "productName": "Dawai Pharmacy",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "identifier": "com.dawai.pharmacy",
   "build": {
     "beforeDevCommand": "npm run dev",
@@ -39,7 +39,7 @@
   },
   "plugins": {
     "updater": {
-      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEYwN0ZFRDM3RDk2RTIwNkUKUldSdUlHN1pOKzEvOEZqNXQvdG9VOWhCSEQ3bjYwMGpzZW9MclNlclkxTkRwQTVsZDc4UDNoOXoK",
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDdDNkU5NEU0MTJFNTM1ODgKUldTSU5lVVM1SlJ1ZkMzOTNSRzA1ZEloVXpvb1N0bDR1UFBhVGFoSWkyRkl0eFlic1I4ZmFMZW8K",
       "endpoints": [
         "https://github.com/montasir199/Pharmacy-Management-/releases/latest/download/latest.json"
       ],
