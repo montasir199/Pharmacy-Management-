@@ -56,6 +56,26 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
 
+      - name: Smoke-test Windows installer
+        shell: pwsh
+        run: |
+          $bundleDir = "src-tauri/target/release/bundle/nsis"
+          $installer = Get-ChildItem -Path $bundleDir -Filter "*.exe" -File | Select-Object -First 1
+          if (-not $installer) {
+            throw "No NSIS installer was produced in $bundleDir"
+          }
+          $installDir = Join-Path $env:RUNNER_TEMP "dawai-pharmacy-install"
+          $process = Start-Process -FilePath $installer.FullName -ArgumentList @("/S", "/D=$installDir") -Wait -PassThru
+          if ($process.ExitCode -ne 0) {
+            throw "NSIS installer exited with code $($process.ExitCode)"
+          }
+          $installedApp = Get-ChildItem -Path $installDir -Filter "*.exe" -File |
+            Where-Object { $_.Name -notmatch "uninstall" } |
+            Select-Object -First 1
+          if (-not $installedApp) {
+            throw "The installer completed but no application executable was found in $installDir"
+          }
+
       - name: Create update manifest and GitHub release
         shell: pwsh
         env:
@@ -64,8 +84,15 @@ jobs:
           $version = (Get-Content src-tauri/tauri.conf.json -Raw | ConvertFrom-Json).version
           $tag = "v$version"
           $bundleDir = "src-tauri/target/release/bundle/nsis"
-          $zip = Get-Item "$bundleDir/*.nsis.zip" | Select-Object -First 1
-          $signature = Get-Content "$($zip.FullName).sig" -Raw
+          $installer = Get-ChildItem -Path $bundleDir -Filter "*.exe" -File | Select-Object -First 1
+          if (-not $installer) {
+            throw "No NSIS installer was produced in $bundleDir"
+          }
+          $signaturePath = "$($installer.FullName).sig"
+          if (-not (Test-Path -Path $signaturePath -PathType Leaf)) {
+            throw "Updater signature was not produced: $signaturePath"
+          }
+          $signature = Get-Content $signaturePath -Raw
           $manifest = @{
             version = $version
             notes = "Update available for Dawai Pharmacy"
@@ -73,7 +100,7 @@ jobs:
             platforms = @{
               "windows-x86_64" = @{
                 signature = $signature.Trim()
-                url = "https://github.com/montasir199/Pharmacy-Management-/releases/download/$tag/$($zip.Name)"
+                url = "https://github.com/montasir199/Pharmacy-Management-/releases/download/$tag/$($installer.Name)"
               }
             }
           } | ConvertTo-Json -Depth 5
@@ -83,7 +110,7 @@ jobs:
             --target "${{ github.sha }}" `
             --title "Dawai Pharmacy $version" `
             --notes "Signed Windows installer for Dawai Pharmacy $version" `
-            "$bundleDir/*.exe" "$($zip.FullName)" "$bundleDir/latest.json"
+            "$($installer.FullName)" "$bundleDir/latest.json"
 
       - name: Upload Windows installer
         uses: actions/upload-artifact@v4
