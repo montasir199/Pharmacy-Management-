@@ -14,7 +14,7 @@ const DATABASE_FILE: &str = "pharmacy.sqlite3";
 pub enum DatabaseError {
     #[error("database filesystem operation failed")]
     Io(#[from] std::io::Error),
-    #[error("SQLite operation failed")]
+    #[error("SQLite operation failed: {0}")]
     Sqlite(#[from] rusqlite::Error),
     #[error("database migration failed")]
     Migration(#[from] rusqlite_migration::Error),
@@ -29,6 +29,9 @@ fn migrations() -> Migrations<'static> {
         M::up(include_str!("../migrations/0001_core.sql")),
         M::up(include_str!("../migrations/0002_inventory.sql")),
         M::up(include_str!("../migrations/0003_operations.sql")),
+        M::up(include_str!(
+            "../migrations/0004_sales_and_pharmacy_settings.sql"
+        )),
     ])
 }
 
@@ -200,7 +203,7 @@ mod tests {
         let connection =
             Connection::open(directory.path().join(DATABASE_FILE)).expect("create database file");
         connection
-            .pragma_update(None, "user_version", 4)
+            .pragma_update(None, "user_version", 5)
             .expect("set future schema version");
         drop(connection);
 

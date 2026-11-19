@@ -4,7 +4,7 @@ use thiserror::Error;
 
 #[derive(Debug, Error)]
 pub enum InventoryError {
-    #[error("SQLite operation failed")]
+    #[error("SQLite operation failed: {0}")]
     Sqlite(#[from] rusqlite::Error),
     #[error("product fields must not be empty and reorder level must be non-negative")]
     InvalidProduct,
@@ -58,6 +58,7 @@ pub struct ProductSummary {
     pub name_en: String,
     pub base_unit: String,
     pub reorder_level_units: i64,
+    pub sale_price_minor: i64,
     pub available_units: i64,
 }
 
@@ -77,30 +78,53 @@ pub fn create_product(
     name_en: &str,
     base_unit: &str,
     reorder_level_units: i64,
+    sale_price_minor: i64,
 ) -> Result<i64, InventoryError> {
     if [sku, name_ar, name_en, base_unit]
         .iter()
         .any(|value| value.trim().is_empty())
         || barcode.is_some_and(|value| value.trim().is_empty())
         || reorder_level_units < 0
+        || sale_price_minor < 0
     {
         return Err(InventoryError::InvalidProduct);
     }
 
     connection.execute(
         "INSERT INTO products
-         (sku, barcode, name_ar, name_en, base_unit, reorder_level_units)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+         (sku, barcode, name_ar, name_en, base_unit, reorder_level_units, sale_price_minor)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
         params![
             sku.trim(),
             barcode.map(str::trim),
             name_ar.trim(),
             name_en.trim(),
             base_unit.trim(),
-            reorder_level_units
+            reorder_level_units,
+            sale_price_minor
         ],
     )?;
     Ok(connection.last_insert_rowid())
+}
+
+pub fn update_product_sale_price(
+    connection: &Connection,
+    product_id: i64,
+    sale_price_minor: i64,
+) -> Result<(), InventoryError> {
+    if product_id <= 0 || sale_price_minor < 0 {
+        return Err(InventoryError::InvalidProduct);
+    }
+    let updated = connection.execute(
+        "UPDATE products SET sale_price_minor = ?1,
+         updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+         WHERE id = ?2 AND is_enabled = 1",
+        params![sale_price_minor, product_id],
+    )?;
+    if updated == 0 {
+        return Err(InventoryError::InvalidProductId);
+    }
+    Ok(())
 }
 
 pub fn receive_batch(
@@ -332,6 +356,7 @@ pub fn list_products(connection: &Connection) -> Result<Vec<ProductSummary>, Inv
         "SELECT products.id, products.sku, products.barcode,
                 products.name_ar, products.name_en, products.base_unit,
                 products.reorder_level_units,
+                products.sale_price_minor,
                 COALESCE(SUM(stock_movements.delta_units), 0) AS available_units
          FROM products
          LEFT JOIN batches ON batches.product_id = products.id
@@ -351,7 +376,8 @@ pub fn list_products(connection: &Connection) -> Result<Vec<ProductSummary>, Inv
                 name_en: row.get(4)?,
                 base_unit: row.get(5)?,
                 reorder_level_units: row.get(6)?,
-                available_units: row.get(7)?,
+                sale_price_minor: row.get(7)?,
+                available_units: row.get(8)?,
             })
         })?
         .collect::<Result<Vec<_>, _>>()?;
@@ -395,6 +421,7 @@ mod tests {
             "Paracetamol 500 mg",
             "قرص",
             10,
+            1250,
         )
         .expect("create product");
         (directory, connection, product_id)

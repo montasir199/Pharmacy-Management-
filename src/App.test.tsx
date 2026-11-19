@@ -35,8 +35,13 @@ describe('main application shell', () => {
         nameEn: 'Paracetamol',
         baseUnit: 'قرص',
         reorderLevelUnits: 5,
+        salePriceMinor: 1250,
         availableUnits: 24,
       }])
+      if (command === 'create_sale') return Promise.resolve({
+        invoiceNumber: 'INV-20261119-000001',
+        totalMinor: 1250,
+      })
       if (command === 'get_setting') return Promise.resolve('')
       return Promise.resolve([])
     })
@@ -87,6 +92,7 @@ describe('main application shell', () => {
     await user.type(screen.getByLabelText('اسم المنتج بالعربية'), 'دواء جديد')
     await user.type(screen.getByLabelText('اسم المنتج بالإنجليزية'), 'New medicine')
     await user.type(screen.getByLabelText('الوحدة الأساسية'), 'قرص')
+    await user.type(screen.getByLabelText('سعر الوحدة'), '12.50')
     await user.click(screen.getByRole('button', { name: 'حفظ المنتج' }))
 
     await waitFor(() => {
@@ -96,6 +102,7 @@ describe('main application shell', () => {
         nameEn: 'New medicine',
         baseUnit: 'قرص',
         reorderLevelUnits: 0,
+        salePriceMinor: 1250,
       }))
     })
   })
@@ -109,11 +116,35 @@ describe('main application shell', () => {
     await user.click(screen.getByRole('button', { name: 'حفظ الإعدادات' }))
 
     await waitFor(() => {
-      expect(invokeMock).toHaveBeenCalledWith('set_setting', {
-        key: 'pharmacy_name',
-        value: 'صيدلية النور',
+      expect(invokeMock).toHaveBeenCalledWith('set_settings', {
+        settings: expect.objectContaining({
+          pharmacy_name: 'صيدلية النور',
+          pharmacy_address: '',
+          pharmacy_phone: '',
+          pharmacy_tax_number: '',
+          pharmacy_logo: '',
+        }),
       })
     })
+  })
+
+  it('creates a point-of-sale invoice with a generated number and enables printing', async () => {
+    const user = userEvent.setup()
+    render(<App />)
+    await user.click(screen.getByRole('button', { name: 'المبيعات' }))
+
+    await user.click(await screen.findByRole('button', { name: /باراسيتامول/ }))
+    await user.click(screen.getByRole('button', { name: 'حفظ فاتورة البيع' }))
+
+    await waitFor(() => {
+      expect(invokeMock).toHaveBeenCalledWith('create_sale', {
+        customerId: null,
+        items: [{ productId: 1, quantity: 1 }],
+        status: 'paid',
+      })
+    })
+    expect(await screen.findByText('INV-20261119-000001')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /طباعة الفاتورة/ })).toBeInTheDocument()
   })
 
   it('opens every application page without a placeholder screen', async () => {

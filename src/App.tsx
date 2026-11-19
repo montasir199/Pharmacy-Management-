@@ -14,9 +14,11 @@ import {
   Globe2,
   LayoutDashboard,
   Menu,
+  Minus,
   Moon,
   Package,
   Plus,
+  Printer,
   Search,
   Settings,
   ShoppingCart,
@@ -36,6 +38,7 @@ type ProductSummary = {
   nameEn: string
   baseUnit: string
   reorderLevelUnits: number
+  salePriceMinor: number
   availableUnits: number
 }
 type BatchBalance = {
@@ -69,6 +72,19 @@ type PurchaseSummary = {
   totalMinor: number
   status: string
   purchasedAt: string
+}
+type SaleCartLine = { productId: number; quantity: number }
+type SaleReceipt = {
+  invoiceNumber: string
+  totalMinor: number
+  customerName: string | null
+  soldAt: string
+  items: Array<{
+    productName: string
+    quantity: number
+    unitPriceMinor: number
+    lineTotalMinor: number
+  }>
 }
 type NavigationKey =
   | 'dashboard'
@@ -124,15 +140,20 @@ function App() {
   const [purchaseExpiry, setPurchaseExpiry] = useState('')
   const [purchaseQuantity, setPurchaseQuantity] = useState('')
   const [pharmacyName, setPharmacyName] = useState('')
+  const [pharmacyAddress, setPharmacyAddress] = useState('')
+  const [pharmacyPhone, setPharmacyPhone] = useState('')
+  const [pharmacyTaxNumber, setPharmacyTaxNumber] = useState('')
+  const [pharmacyLogo, setPharmacyLogo] = useState('')
+  const [productSalePrice, setProductSalePrice] = useState('')
+  const [productPrices, setProductPrices] = useState<Record<number, string>>({})
   const [batchNumber, setBatchNumber] = useState('')
   const [batchExpiry, setBatchExpiry] = useState('')
   const [batchUnits, setBatchUnits] = useState('')
   const [batchProductId, setBatchProductId] = useState('')
-  const [saleInvoice, setSaleInvoice] = useState('')
-  const [saleProductId, setSaleProductId] = useState('')
   const [saleCustomerId, setSaleCustomerId] = useState('')
-  const [saleQuantity, setSaleQuantity] = useState('')
-  const [salePrice, setSalePrice] = useState('')
+  const [saleCart, setSaleCart] = useState<SaleCartLine[]>([])
+  const [saleSearch, setSaleSearch] = useState('')
+  const [saleReceipt, setSaleReceipt] = useState<SaleReceipt | null>(null)
   const [globalSearch, setGlobalSearch] = useState('')
   const [productBarcode, setProductBarcode] = useState('')
   const [reorderLevel, setReorderLevel] = useState('0')
@@ -275,7 +296,13 @@ function App() {
 
   async function refreshSetting() {
     try {
-      setPharmacyName(await invoke<string>('get_setting', { key: 'pharmacy_name' }))
+      const keys = ['pharmacy_name', 'pharmacy_address', 'pharmacy_phone', 'pharmacy_tax_number', 'pharmacy_logo']
+      const values = await Promise.all(keys.map((key) => invoke<string>('get_setting', { key })))
+      setPharmacyName(values[0])
+      setPharmacyAddress(values[1])
+      setPharmacyPhone(values[2])
+      setPharmacyTaxNumber(values[3])
+      setPharmacyLogo(values[4])
     } catch (error) {
       setInventoryError(error instanceof Error ? error.message : String(error))
     }
@@ -313,7 +340,15 @@ function App() {
     event.preventDefault()
     setInventoryError('')
     try {
-      await invoke('set_setting', { key: 'pharmacy_name', value: pharmacyName })
+      await invoke('set_settings', {
+        settings: {
+          pharmacy_name: pharmacyName,
+          pharmacy_address: pharmacyAddress,
+          pharmacy_phone: pharmacyPhone,
+          pharmacy_tax_number: pharmacyTaxNumber,
+          pharmacy_logo: pharmacyLogo,
+        },
+      })
     } catch (error) {
       setInventoryError(error instanceof Error ? error.message : String(error))
     }
@@ -345,25 +380,92 @@ function App() {
     event.preventDefault()
     setInventoryError('')
     try {
-      await invoke<number>('create_sale', {
-        invoiceNumber: saleInvoice,
+      const createdSale = await invoke<{ invoiceNumber: string; totalMinor: number }>('create_sale', {
         customerId: saleCustomerId ? Number(saleCustomerId) : null,
-        productId: Number(saleProductId),
-        quantity: Number(saleQuantity),
-        unitPriceMinor: Math.round(Number(salePrice) * 100),
+        items: saleCart.map(({ productId, quantity }) => ({ productId, quantity })),
         status: 'paid',
       })
-      setSaleInvoice('')
-      setSaleProductId('')
+      setSaleReceipt({
+        ...createdSale,
+        customerName: customers.find((customer) => customer.id === Number(saleCustomerId))?.name ?? null,
+        soldAt: new Date().toISOString(),
+        items: saleCart.flatMap(({ productId, quantity }) => {
+          const product = products.find((entry) => entry.id === productId)
+          return product ? [{
+            productName: isArabic ? product.nameAr : product.nameEn,
+            quantity,
+            unitPriceMinor: product.salePriceMinor,
+            lineTotalMinor: quantity * product.salePriceMinor,
+          }] : []
+        }),
+      })
+      setSaleCart([])
       setSaleCustomerId('')
-      setSaleQuantity('')
-      setSalePrice('')
       await refreshDashboard()
       await refreshProducts()
       await refreshSales()
     } catch (error) {
       setInventoryError(error instanceof Error ? error.message : String(error))
     }
+  }
+
+  function addToSaleCart(productId: number) {
+    setSaleReceipt(null)
+    setSaleCart((current) => {
+      const existing = current.find((line) => line.productId === productId)
+      const product = products.find((entry) => entry.id === productId)
+      if (!product || !product.salePriceMinor || !product.availableUnits) return current
+      if (existing) {
+        if (existing.quantity >= product.availableUnits) return current
+        return current.map((line) => line.productId === productId
+          ? { ...line, quantity: line.quantity + 1 }
+          : line)
+      }
+      return [...current, { productId, quantity: 1 }]
+    })
+  }
+
+  function changeSaleQuantity(productId: number, change: number) {
+    setSaleReceipt(null)
+    setSaleCart((current) => current.flatMap((line) => {
+      if (line.productId !== productId) return [line]
+      const quantity = line.quantity + change
+      const product = products.find((entry) => entry.id === productId)
+      return quantity <= 0 ? [] : product && quantity <= product.availableUnits
+        ? [{ ...line, quantity }]
+        : [line]
+    }))
+  }
+
+  async function saveProductPrice(productId: number) {
+    setInventoryError('')
+    try {
+      await invoke('update_product_sale_price', {
+        productId,
+        salePriceMinor: Math.round(Number(productPrices[productId]) * 100),
+      })
+      await refreshProducts()
+    } catch (error) {
+      setInventoryError(error instanceof Error ? error.message : String(error))
+    }
+  }
+
+  function handleLogoUpload(file?: File) {
+    if (!file) return
+    if (!['image/png', 'image/jpeg', 'image/webp'].includes(file.type)) {
+      setInventoryError(t('logoFileTypeError'))
+      return
+    }
+    if (file.size > 1024 * 1024) {
+      setInventoryError(t('logoFileSizeError'))
+      return
+    }
+    const reader = new FileReader()
+    reader.onload = () => {
+      if (typeof reader.result === 'string') setPharmacyLogo(reader.result)
+    }
+    reader.onerror = () => setInventoryError(t('logoReadError'))
+    reader.readAsDataURL(file)
   }
 
   const createCustomer = async (event: FormEvent<HTMLFormElement>) => {
@@ -385,6 +487,9 @@ function App() {
     try {
       const result = await invoke<ProductSummary[]>('list_products')
       setProducts(result)
+      setProductPrices(Object.fromEntries(
+        result.map((product) => [product.id, (product.salePriceMinor / 100).toFixed(2)]),
+      ))
     } catch (error) {
       setInventoryError(error instanceof Error ? error.message : String(error))
     } finally {
@@ -403,6 +508,7 @@ function App() {
         nameEn: productNameEn,
         baseUnit,
         reorderLevelUnits: Number(reorderLevel),
+        salePriceMinor: Math.round(Number(productSalePrice) * 100),
       })
       setProductSku('')
       setProductNameAr('')
@@ -410,6 +516,7 @@ function App() {
       setBaseUnit('')
       setProductBarcode('')
       setReorderLevel('0')
+      setProductSalePrice('')
       await refreshProducts()
     } catch (error) {
       setInventoryError(error instanceof Error ? error.message : String(error))
@@ -469,7 +576,9 @@ function App() {
       <aside className={`sidebar ${sidebarOpen ? 'is-open' : ''}`}>
         <div className="brand">
           <div className="brand-mark" aria-hidden="true">
-            <Activity size={21} strokeWidth={2.5} />
+            {pharmacyLogo
+              ? <img src={pharmacyLogo} alt="" />
+              : <Activity size={21} strokeWidth={2.5} />}
           </div>
           <div className="brand-copy">
             <strong>{t('brand')}</strong>
@@ -841,6 +950,10 @@ function App() {
                   <span>{t('reorderLevel')}</span>
                   <input type="number" min="0" step="1" value={reorderLevel} onChange={(event) => setReorderLevel(event.target.value)} required />
                 </label>
+                <label>
+                  <span>{t('unitPrice')}</span>
+                  <input type="number" min="0.01" step="0.01" value={productSalePrice} onChange={(event) => setProductSalePrice(event.target.value)} required />
+                </label>
                 <button className="primary-button" type="submit">{t('saveProduct')}</button>
               </form>
 
@@ -868,6 +981,7 @@ function App() {
                         <th>{t('product')}</th>
                         <th>{t('sku')}</th>
                         <th>{t('baseUnit')}</th>
+                        <th>{t('unitPrice')}</th>
                         <th>{t('availableUnits')}</th>
                       </tr>
                     </thead>
@@ -880,12 +994,28 @@ function App() {
                           </td>
                           <td>{product.sku}</td>
                           <td>{product.baseUnit}</td>
+                          <td>
+                            <div className="product-price-editor">
+                              <input
+                                aria-label={`${t('unitPrice')} ${isArabic ? product.nameAr : product.nameEn}`}
+                                type="number"
+                                min="0"
+                                step="0.01"
+                                value={productPrices[product.id] ?? '0.00'}
+                                onChange={(event) => setProductPrices((current) => ({
+                                  ...current,
+                                  [product.id]: event.target.value,
+                                }))}
+                              />
+                              <button className="text-button" type="button" onClick={() => void saveProductPrice(product.id)}>{t('savePrice')}</button>
+                            </div>
+                          </td>
                           <td><span className={product.availableUnits <= product.reorderLevelUnits ? 'stock-low' : 'stock-ok'}>{product.availableUnits}</span></td>
                         </tr>
                       ))}
                       {products.length === 0 && !inventoryLoading && (
                         <tr>
-                          <td colSpan={4} className="inventory-empty">{t('noProducts')}</td>
+                          <td colSpan={5} className="inventory-empty">{t('noProducts')}</td>
                         </tr>
                       )}
                     </tbody>
@@ -980,8 +1110,17 @@ function App() {
         ) : activePage === 'settings' ? (
           <section className="page-content inventory-page">
             <div className="page-heading"><div><h2>{t('settingsHeading')}</h2><p>{t('settingsDescription')}</p></div></div>
-            <form className="panel inventory-form" onSubmit={saveSetting}>
+            <form className="panel inventory-form pharmacy-settings-form" onSubmit={saveSetting}>
               <label><span>{t('pharmacyName')}</span><input value={pharmacyName} onChange={(e) => setPharmacyName(e.target.value)} required /></label>
+              <label><span>{t('pharmacyAddress')}</span><input value={pharmacyAddress} onChange={(e) => setPharmacyAddress(e.target.value)} /></label>
+              <label><span>{t('phone')}</span><input type="tel" value={pharmacyPhone} onChange={(e) => setPharmacyPhone(e.target.value)} /></label>
+              <label><span>{t('pharmacyTaxNumber')}</span><input value={pharmacyTaxNumber} onChange={(e) => setPharmacyTaxNumber(e.target.value)} /></label>
+              <label className="logo-upload">
+                <span>{t('pharmacyLogo')}</span>
+                <input type="file" accept="image/png,image/jpeg,image/webp" onChange={(event) => handleLogoUpload(event.target.files?.[0])} />
+                {pharmacyLogo && <img className="logo-preview" src={pharmacyLogo} alt={t('pharmacyLogo')} />}
+              </label>
+              {pharmacyLogo && <button className="text-button" type="button" onClick={() => setPharmacyLogo('')}>{t('removeLogo')}</button>}
               <button className="primary-button" type="submit">{t('saveSettings')}</button>
             </form>
           </section>
@@ -996,14 +1135,96 @@ function App() {
               </div>
             )}
             {activePage === 'sales' && (
-              <form className="panel inventory-form sale-form" onSubmit={createSale}>
-                <label><span>{t('invoice')}</span><input value={saleInvoice} onChange={(e) => setSaleInvoice(e.target.value)} required /></label>
-                <label><span>{t('customer')}</span><select value={saleCustomerId} onChange={(e) => setSaleCustomerId(e.target.value)}><option value="">-</option>{customers.map((customer) => <option key={customer.id} value={customer.id}>{customer.name}</option>)}</select></label>
-                <label><span>{t('product')}</span><select value={saleProductId} onChange={(e) => setSaleProductId(e.target.value)} required><option value="">--</option>{products.map((product) => <option key={product.id} value={product.id}>{isArabic ? product.nameAr : product.nameEn}</option>)}</select></label>
-                <label><span>{t('quantityUnits')}</span><input type="number" min="1" value={saleQuantity} onChange={(e) => setSaleQuantity(e.target.value)} required /></label>
-                <label><span>{t('unitPrice')}</span><input type="number" min="0" step="0.01" value={salePrice} onChange={(e) => setSalePrice(e.target.value)} required /></label>
-                <button className="primary-button" type="submit">{t('saveSale')}</button>
-              </form>
+              <>
+                <div className="pos-layout">
+                  <section className="panel pos-catalog">
+                    <div className="panel-heading"><div><h3>{t('posProducts')}</h3><p>{t('posProductsDescription')}</p></div></div>
+                    <label className="product-search">
+                      <Search size={16} />
+                      <input aria-label={t('searchProducts')} value={saleSearch} onChange={(event) => setSaleSearch(event.target.value)} placeholder={t('searchProducts')} />
+                    </label>
+                    <div className="pos-product-grid">
+                      {products.filter((product) => {
+                        const query = saleSearch.trim().toLocaleLowerCase()
+                        return !query || [product.nameAr, product.nameEn, product.sku, product.barcode ?? '']
+                          .some((value) => value.toLocaleLowerCase().includes(query))
+                      }).map((product) => (
+                        <button
+                          className="pos-product-card"
+                          type="button"
+                          key={product.id}
+                          onClick={() => addToSaleCart(product.id)}
+                          disabled={product.availableUnits === 0 || product.salePriceMinor <= 0}
+                        >
+                          <strong>{isArabic ? product.nameAr : product.nameEn}</strong>
+                          <span>{product.sku} · {product.availableUnits} {t('availableUnits')}</span>
+                          <b>{formatMoney(product.salePriceMinor)}</b>
+                          {product.salePriceMinor <= 0 && <small>{t('setProductPrice')}</small>}
+                        </button>
+                      ))}
+                      {products.length === 0 && <p className="inventory-empty">{t('noProducts')}</p>}
+                    </div>
+                  </section>
+                  <form className="panel pos-cart" onSubmit={createSale}>
+                    <div className="panel-heading"><div><h3>{t('currentSale')}</h3><p>{t('invoiceAutoGenerated')}</p></div></div>
+                    <label><span>{t('customer')}</span><select value={saleCustomerId} onChange={(event) => setSaleCustomerId(event.target.value)}><option value="">-</option>{customers.map((customer) => <option key={customer.id} value={customer.id}>{customer.name}</option>)}</select></label>
+                    <div className="pos-cart-items">
+                      {saleCart.map(({ productId, quantity }) => {
+                        const product = products.find((entry) => entry.id === productId)
+                        if (!product) return null
+                        return (
+                          <div className="pos-cart-line" key={productId}>
+                            <div className="pos-cart-product">
+                              <strong>{isArabic ? product.nameAr : product.nameEn}</strong>
+                              <span>{formatMoney(product.salePriceMinor)} · {formatMoney(product.salePriceMinor * quantity)}</span>
+                            </div>
+                            <div className="quantity-control">
+                              <button type="button" aria-label={t('decreaseQuantity')} onClick={() => changeSaleQuantity(productId, -1)}><Minus size={14} /></button>
+                              <span>{quantity}</span>
+                              <button type="button" aria-label={t('increaseQuantity')} onClick={() => changeSaleQuantity(productId, 1)} disabled={quantity >= product.availableUnits}><Plus size={14} /></button>
+                            </div>
+                          </div>
+                        )
+                      })}
+                      {saleCart.length === 0 && <p className="inventory-empty">{t('emptySaleCart')}</p>}
+                    </div>
+                    <div className="pos-total">
+                      <span>{t('total')}</span>
+                      <strong>{formatMoney(saleCart.reduce((total, line) => {
+                        const product = products.find((entry) => entry.id === line.productId)
+                        return total + line.quantity * (product?.salePriceMinor ?? 0)
+                      }, 0))}</strong>
+                    </div>
+                    <button className="primary-button" type="submit" disabled={saleCart.length === 0}>{t('saveSale')}</button>
+                  </form>
+                </div>
+                {saleReceipt && (
+                  <section className="panel receipt-panel">
+                    <div className="receipt-actions">
+                      <h3>{t('saleSaved')}</h3>
+                      <button className="primary-button" type="button" onClick={() => window.print()}><Printer size={16} />{t('printInvoice')}</button>
+                    </div>
+                    <div className="print-receipt" dir={isArabic ? 'rtl' : 'ltr'}>
+                      {pharmacyLogo && <img className="receipt-logo" src={pharmacyLogo} alt={t('pharmacyLogo')} />}
+                      <h2>{pharmacyName || t('pharmacyName')}</h2>
+                      {pharmacyAddress && <p>{pharmacyAddress}</p>}
+                      {pharmacyPhone && <p>{t('phone')}: {pharmacyPhone}</p>}
+                      {pharmacyTaxNumber && <p>{t('pharmacyTaxNumber')}: {pharmacyTaxNumber}</p>}
+                      <hr />
+                      <p><strong>{t('invoice')}:</strong> {saleReceipt.invoiceNumber}</p>
+                      <p><strong>{t('date')}:</strong> {new Date(saleReceipt.soldAt).toLocaleString(isArabic ? 'ar' : 'en')}</p>
+                      <p><strong>{t('customer')}:</strong> {saleReceipt.customerName ?? t('cashCustomer')}</p>
+                      <div className="table-scroll"><table>
+                        <thead><tr><th>{t('product')}</th><th>{t('quantityUnits')}</th><th>{t('unitPrice')}</th><th>{t('amount')}</th></tr></thead>
+                        <tbody>{saleReceipt.items.map((item, index) => (
+                          <tr key={`${item.productName}-${index}`}><td>{item.productName}</td><td>{item.quantity}</td><td>{formatMoney(item.unitPriceMinor)}</td><td>{formatMoney(item.lineTotalMinor)}</td></tr>
+                        ))}</tbody>
+                      </table></div>
+                      <h3>{t('total')}: {formatMoney(saleReceipt.totalMinor)}</h3>
+                    </div>
+                  </section>
+                )}
+              </>
             )}
             <section className="panel inventory-products">
               <div className="table-scroll"><table><thead><tr><th>{t('invoice')}</th><th>{t('customer')}</th><th>{t('date')}</th><th>{t('amount')}</th><th>{t('status')}</th></tr></thead>

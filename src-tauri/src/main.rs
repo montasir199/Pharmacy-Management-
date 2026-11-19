@@ -4,6 +4,7 @@ mod database;
 mod inventory;
 mod operations;
 
+use std::collections::HashMap;
 use std::sync::Mutex;
 use tauri::Manager;
 
@@ -20,6 +21,7 @@ fn create_product(
     name_en: String,
     base_unit: String,
     reorder_level_units: i64,
+    sale_price_minor: i64,
 ) -> Result<i64, String> {
     let connection = state
         .connection
@@ -33,8 +35,23 @@ fn create_product(
         &name_en,
         &base_unit,
         reorder_level_units,
+        sale_price_minor,
     )
     .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn update_product_sale_price(
+    state: tauri::State<'_, DatabaseState>,
+    product_id: i64,
+    sale_price_minor: i64,
+) -> Result<(), String> {
+    let connection = state
+        .connection
+        .lock()
+        .map_err(|_| "database state is unavailable".to_owned())?;
+    inventory::update_product_sale_price(&connection, product_id, sale_price_minor)
+        .map_err(|error| error.to_string())
 }
 
 #[tauri::command]
@@ -206,26 +223,29 @@ fn set_setting(
 }
 
 #[tauri::command]
-fn create_sale(
+fn set_settings(
     state: tauri::State<'_, DatabaseState>,
-    invoice_number: String,
-    customer_id: Option<i64>,
-    product_id: i64,
-    quantity: i64,
-    unit_price_minor: i64,
-    status: String,
-) -> Result<i64, String> {
+    settings: HashMap<String, String>,
+) -> Result<(), String> {
     let mut connection = state
         .connection
         .lock()
         .map_err(|_| "database state is unavailable".to_owned())?;
-    operations::create_sale(
-        &mut connection,
-        &invoice_number,
-        customer_id,
-        &[(product_id, quantity, unit_price_minor)],
-        &status,
-    )
+    operations::set_settings(&mut connection, &settings).map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn create_sale(
+    state: tauri::State<'_, DatabaseState>,
+    customer_id: Option<i64>,
+    items: Vec<operations::SaleCartItem>,
+    status: String,
+) -> Result<operations::CreatedSale, String> {
+    let mut connection = state
+        .connection
+        .lock()
+        .map_err(|_| "database state is unavailable".to_owned())?;
+    operations::create_sale(&mut connection, customer_id, &items, &status)
 }
 
 fn main() {
@@ -244,6 +264,7 @@ fn main() {
         })
         .invoke_handler(tauri::generate_handler![
             create_product,
+            update_product_sale_price,
             receive_batch,
             dispense_fefo,
             get_batch_balances,
@@ -256,6 +277,7 @@ fn main() {
             create_purchase,
             get_setting,
             set_setting,
+            set_settings,
             create_sale
         ])
         .run(tauri::generate_context!())

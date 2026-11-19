@@ -1,5 +1,5 @@
 use rusqlite::{params, Connection, Transaction, TransactionBehavior};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -189,18 +189,30 @@ pub fn create_customer(
         .map_err(|error| error.to_string())
 }
 
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SaleCartItem {
+    pub product_id: i64,
+    pub quantity: i64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CreatedSale {
+    pub invoice_number: String,
+    pub total_minor: i64,
+}
+
 pub fn create_sale(
     connection: &mut Connection,
-    invoice_number: &str,
     customer_id: Option<i64>,
-    items: &[(i64, i64, i64)],
+    items: &[SaleCartItem],
     status: &str,
-) -> Result<i64, String> {
-    if invoice_number.trim().is_empty()
-        || items.is_empty()
-        || items.iter().any(|(product_id, quantity, unit_price)| {
-            *product_id <= 0 || *quantity <= 0 || *unit_price < 0
-        })
+) -> Result<CreatedSale, String> {
+    if items.is_empty()
+        || items
+            .iter()
+            .any(|item| item.product_id <= 0 || item.quantity <= 0)
         || !matches!(status, "paid" | "pending" | "cancelled")
     {
         return Err("Invalid sale details".to_owned());
@@ -208,18 +220,40 @@ pub fn create_sale(
     let transaction: Transaction<'_> = connection
         .transaction_with_behavior(TransactionBehavior::Immediate)
         .map_err(|error| error.to_string())?;
+    let items = items
+        .iter()
+        .map(|item| {
+            let unit_price_minor = transaction
+                .query_row(
+                    "SELECT sale_price_minor FROM products
+                     WHERE id = ?1 AND is_enabled = 1",
+                    [item.product_id],
+                    |row| row.get::<_, i64>(0),
+                )
+                .map_err(|error| error.to_string())?;
+            if unit_price_minor <= 0 {
+                return Err("Product must have a sale price greater than zero".to_owned());
+            }
+            Ok((item.product_id, item.quantity, unit_price_minor))
+        })
+        .collect::<Result<Vec<_>, String>>()?;
+    let business_date: String = transaction
+        .query_row("SELECT date('now', 'localtime')", [], |row| row.get(0))
+        .map_err(|error| error.to_string())?;
+    let next_sale_id: i64 = transaction
+        .query_row("SELECT COALESCE(MAX(id), 0) + 1 FROM sales", [], |row| {
+            row.get(0)
+        })
+        .map_err(|error| error.to_string())?;
+    let invoice_number = format!("INV-{}-{next_sale_id:06}", business_date.replace('-', ""));
     if status == "paid" {
-        for (product_id, quantity, _) in items {
+        for (product_id, quantity, _) in &items {
             crate::inventory::dispense_fefo_in_transaction(
                 &transaction,
                 *product_id,
                 *quantity,
-                &transaction
-                    .query_row("SELECT date('now', 'localtime')", [], |row| {
-                        row.get::<_, String>(0)
-                    })
-                    .map_err(|error| error.to_string())?,
-                invoice_number,
+                &business_date,
+                &invoice_number,
             )
             .map_err(|error| error.to_string())?;
         }
@@ -236,13 +270,13 @@ pub fn create_sale(
         .execute(
             "INSERT INTO sales (invoice_number, customer_id, subtotal_minor, total_minor, status)
          VALUES (?1, ?2, ?3, ?3, ?4)",
-            params![invoice_number.trim(), customer_id, total, status],
+            params![invoice_number, customer_id, total, status],
         )
         .map_err(|error| error.to_string())?;
     let sale_id = transaction.last_insert_rowid();
     for (product_id, quantity, unit_price) in items {
         let line_total = quantity
-            .checked_mul(*unit_price)
+            .checked_mul(unit_price)
             .ok_or_else(|| "Sale line total overflow".to_owned())?;
         transaction.execute(
             "INSERT INTO sale_items (sale_id, product_id, quantity, unit_price_minor, line_total_minor)
@@ -251,7 +285,10 @@ pub fn create_sale(
         ).map_err(|error| error.to_string())?;
     }
     transaction.commit().map_err(|error| error.to_string())?;
-    Ok(sale_id)
+    Ok(CreatedSale {
+        invoice_number,
+        total_minor: total,
+    })
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -364,6 +401,27 @@ pub fn set_setting(connection: &Connection, key: &str, value: &str) -> Result<()
     Ok(())
 }
 
+pub fn set_settings(
+    connection: &mut Connection,
+    settings: &std::collections::HashMap<String, String>,
+) -> Result<(), rusqlite::Error> {
+    let transaction = connection.transaction()?;
+    for (key, value) in settings {
+        if key.trim().is_empty() {
+            return Err(rusqlite::Error::InvalidParameterName(
+                "setting key must not be empty".to_owned(),
+            ));
+        }
+        transaction.execute(
+            "INSERT INTO app_settings (key, value) VALUES (?1, ?2)
+             ON CONFLICT(key) DO UPDATE SET value = excluded.value,
+             updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')",
+            params![key, value],
+        )?;
+    }
+    transaction.commit()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -380,9 +438,29 @@ mod tests {
             "Test medicine",
             "tablet",
             2,
+            250,
         )
         .expect("create product");
         (directory, connection, product_id)
+    }
+
+    #[test]
+    fn saves_pharmacy_settings_as_a_single_persistent_update() {
+        let (_directory, mut connection, _) = setup();
+        let settings = std::collections::HashMap::from([
+            ("pharmacy_name".to_owned(), "Dawai".to_owned()),
+            ("pharmacy_address".to_owned(), "Main Street".to_owned()),
+        ]);
+        set_settings(&mut connection, &settings).expect("save pharmacy settings");
+
+        assert_eq!(
+            get_setting(&connection, "pharmacy_name").expect("read pharmacy name"),
+            "Dawai"
+        );
+        assert_eq!(
+            get_setting(&connection, "pharmacy_address").expect("read pharmacy address"),
+            "Main Street"
+        );
     }
 
     #[test]
@@ -456,9 +534,11 @@ mod tests {
 
         assert!(create_sale(
             &mut connection,
-            "INV-001",
             None,
-            &[(product_id, 4, 250)],
+            &[SaleCartItem {
+                product_id,
+                quantity: 4,
+            }],
             "paid",
         )
         .is_err());
@@ -468,14 +548,18 @@ mod tests {
             3
         );
 
-        create_sale(
+        let created_sale = create_sale(
             &mut connection,
-            "INV-002",
             None,
-            &[(product_id, 2, 250)],
+            &[SaleCartItem {
+                product_id,
+                quantity: 2,
+            }],
             "paid",
         )
         .expect("record sale");
+        assert!(created_sale.invoice_number.starts_with("INV-"));
+        assert_eq!(created_sale.total_minor, 500);
         assert_eq!(
             list_sales(&connection).expect("list sales")[0].total_minor,
             500
