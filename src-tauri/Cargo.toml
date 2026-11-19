@@ -4,9 +4,18 @@ version = "0.1.0"
 description = "Offline desktop pharmacy management"
 authors = ["Pharmacy Management"]
 edition = "2021"
+rust-version = "1.89"
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
 tauri = { version = "2", features = [] }
+rusqlite = { version = "0.41", features = ["backup", "bundled"] }
+rusqlite_migration = "2.7"
+thiserror = "2"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["fmt"] }
+
+[dev-dependencies]
+tempfile = "3"
