@@ -16,9 +16,12 @@
     "@tauri-apps/api": "^2.12.5",
     "@tauri-apps/plugin-process": "^2.4.0",
     "@tauri-apps/plugin-updater": "^2.14.1",
+    "html-to-image": "^1.11.13",
     "i18next": "^27.2.2",
     "lucide-react": "^1.76.0",
+    "qrcode.react": "^4.2.0",
     "react": "^19.3.1",
+    "react-barcode": "^1.6.1",
     "react-dom": "^19.3.1",
     "react-i18next": "^18.0.3"
   },

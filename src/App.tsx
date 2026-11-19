@@ -1,7 +1,8 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import type { FormEvent } from 'react'
 import { invoke, isTauri } from '@tauri-apps/api/core'
 import { check } from '@tauri-apps/plugin-updater'
+import { toPng } from 'html-to-image'
 import {
   Activity,
   Bell,
@@ -11,10 +12,12 @@ import {
   CircleHelp,
   ClipboardList,
   CreditCard,
+  DollarSign,
+  Eye,
   Globe2,
+  Landmark,
   LayoutDashboard,
   Menu,
-  Minus,
   Moon,
   Package,
   Plus,
@@ -22,10 +25,15 @@ import {
   Search,
   Settings,
   ShoppingCart,
+  ScanLine,
   Sun,
+  Trash2,
   Users,
+  UserRoundPlus,
   X,
 } from 'lucide-react'
+import Barcode from 'react-barcode'
+import { QRCodeSVG } from 'qrcode.react'
 import { useTranslation } from 'react-i18next'
 import './App.css'
 
@@ -40,6 +48,7 @@ type ProductSummary = {
   reorderLevelUnits: number
   salePriceMinor: number
   availableUnits: number
+  nearestExpiryDate: string | null
 }
 type BatchBalance = {
   batchId: number
@@ -55,6 +64,9 @@ type SaleSummary = {
   soldAt: string
   totalMinor: number
   status: string
+  currencyCode: string
+  exchangeRateScaled: number
+  paymentMethod: string | null
 }
 type DashboardSummary = {
   todaySalesMinor: number
@@ -73,19 +85,67 @@ type PurchaseSummary = {
   status: string
   purchasedAt: string
 }
-type SaleCartLine = { productId: number; quantity: number }
+type CurrencySummary = {
+  code: string
+  name: string
+  symbol: string
+  minorUnitExponent: number
+}
+type SaleCartLine = { productId: number; quantity: number; discountBasisPoints: number }
 type SaleReceipt = {
+  id: number
   invoiceNumber: string
+  subtotalMinor: number
+  discountMinor: number
+  taxMinor: number
   totalMinor: number
   customerName: string | null
   soldAt: string
+  currencyCode: string
+  exchangeRateScaled: number
+  taxRateBasisPoints: number
   items: Array<{
-    productName: string
+    productNameAr: string
+    productNameEn: string
     quantity: number
     unitPriceMinor: number
+    discountMinor: number
     lineTotalMinor: number
   }>
+  payments: Array<{ method: string; amountMinor: number; currencyCode: string }>
 }
+type PrinterConfig = {
+  id: number | null
+  name: string
+  connectionType: 'usb' | 'network'
+  vendorId: number | null
+  productId: number | null
+  host: string | null
+  port: number | null
+  paperWidth: '80mm' | '58mm'
+  dpi: 203 | 300
+  copies: number
+  autoCut: boolean
+  autoPrint: boolean
+  printLogo: boolean
+  fontSize: number
+  isDefault: boolean
+}
+type UsbPrinter = { vendorId: number; productId: number; name: string }
+type NetworkPrinter = { name: string; host: string; port: number }
+type PrintJob = {
+  id: number
+  saleId: number | null
+  invoiceNumber: string | null
+  printerId: number | null
+  printerName: string | null
+  jobType: 'sale' | 'test'
+  status: 'queued' | 'printing' | 'printed' | 'failed'
+  attemptCount: number
+  lastError: string | null
+  createdAt: string
+}
+type PaymentMethod = 'cash' | 'card' | 'bank_transfer' | 'mixed'
 type NavigationKey =
   | 'dashboard'
   | 'sales'
@@ -106,6 +166,24 @@ const navigation: { key: NavigationKey; icon: typeof LayoutDashboard }[] = [
   { key: 'reports', icon: ChartNoAxesCombined },
   { key: 'settings', icon: Settings },
 ]
+
+const emptyPrinter: PrinterConfig = {
+  id: null,
+  name: '',
+  connectionType: 'usb',
+  vendorId: null,
+  productId: null,
+  host: null,
+  port: 9100,
+  paperWidth: '80mm',
+  dpi: 203,
+  copies: 1,
+  autoCut: true,
+  autoPrint: false,
+  printLogo: true,
+  fontSize: 12,
+  isDefault: false,
+}
 
 function readTheme(): Theme {
   return localStorage.getItem('pharmacy-theme') === 'dark' ? 'dark' : 'light'
@@ -143,6 +221,7 @@ function App() {
   const [pharmacyAddress, setPharmacyAddress] = useState('')
   const [pharmacyPhone, setPharmacyPhone] = useState('')
   const [pharmacyTaxNumber, setPharmacyTaxNumber] = useState('')
+  const [pharmacyTaxRate, setPharmacyTaxRate] = useState('0')
   const [pharmacyLogo, setPharmacyLogo] = useState('')
   const [productSalePrice, setProductSalePrice] = useState('')
   const [productPrices, setProductPrices] = useState<Record<number, string>>({})
@@ -153,11 +232,53 @@ function App() {
   const [saleCustomerId, setSaleCustomerId] = useState('')
   const [saleCart, setSaleCart] = useState<SaleCartLine[]>([])
   const [saleSearch, setSaleSearch] = useState('')
+  const [saleBarcode, setSaleBarcode] = useState('')
+  const [currencies, setCurrencies] = useState<CurrencySummary[]>([])
+  const [saleCurrencyCode, setSaleCurrencyCode] = useState('SAR')
+  const [exchangeRate, setExchangeRate] = useState('1')
+  const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>('cash')
+  const [paymentAmounts, setPaymentAmounts] = useState<Record<'cash' | 'card' | 'bank_transfer', string>>({
+    cash: '',
+    card: '',
+    bank_transfer: '',
+  })
+  const [saleSubmitting, setSaleSubmitting] = useState(false)
+  const [saleStartedAt, setSaleStartedAt] = useState(() => new Date())
+  const [quickCustomerOpen, setQuickCustomerOpen] = useState(false)
+  const [quickCustomerName, setQuickCustomerName] = useState('')
+  const [quickCustomerPhone, setQuickCustomerPhone] = useState('')
+  const [clearInvoiceOpen, setClearInvoiceOpen] = useState(false)
+  const [removeProductId, setRemoveProductId] = useState<number | null>(null)
+  const [selectedSaleProductId, setSelectedSaleProductId] = useState<number | null>(null)
+  const [receiptWidth, setReceiptWidth] = useState<'a4' | '80mm' | '58mm'>('a4')
   const [saleReceipt, setSaleReceipt] = useState<SaleReceipt | null>(null)
+  const [printers, setPrinters] = useState<PrinterConfig[]>([])
+  const [printerForm, setPrinterForm] = useState<PrinterConfig>(emptyPrinter)
+  const [usbPrinters, setUsbPrinters] = useState<UsbPrinter[]>([])
+  const [networkPrinters, setNetworkPrinters] = useState<NetworkPrinter[]>([])
+  const [printJobs, setPrintJobs] = useState<PrintJob[]>([])
+  const [receiptPrinterId, setReceiptPrinterId] = useState<number | null>(null)
+  const [printNotice, setPrintNotice] = useState('')
+  const [printerBusy, setPrinterBusy] = useState(false)
+  const [autoPrintSaleId, setAutoPrintSaleId] = useState<number | null>(null)
+  const [retryPrintJobId, setRetryPrintJobId] = useState<number | null>(null)
   const [globalSearch, setGlobalSearch] = useState('')
   const [productBarcode, setProductBarcode] = useState('')
   const [reorderLevel, setReorderLevel] = useState('0')
   const [sales, setSales] = useState<SaleSummary[]>([])
+  const saleSearchRef = useRef<HTMLInputElement>(null)
+  const saleBarcodeRef = useRef<HTMLInputElement>(null)
+  const saleCustomerRef = useRef<HTMLSelectElement>(null)
+  const paymentSectionRef = useRef<HTMLDivElement>(null)
+  const saleFormRef = useRef<HTMLFormElement>(null)
+  const quickCustomerInputRef = useRef<HTMLInputElement>(null)
+  const receiptRef = useRef<HTMLDivElement>(null)
+  const testReceiptRef = useRef<HTMLDivElement>(null)
+  const autoPrintHandledRef = useRef<number | null>(null)
+  const retryPrintStartedRef = useRef<number | null>(null)
+  const sendReceiptRef = useRef<((saleId: number, printer: PrinterConfig, retryJobId?: number) => Promise<void>) | null>(null)
+  const [printerTestTime] = useState(() => new Date())
+  const taxRateBasisPoints = Math.max(0, Math.min(10000, Math.round((Number(pharmacyTaxRate) || 0) * 100)))
   const [availableUpdate, setAvailableUpdate] = useState<{
     version: string
     body?: string
@@ -165,16 +286,72 @@ function App() {
   const [updateStatus, setUpdateStatus] = useState<'idle' | 'checking' | 'downloading' | 'error'>('idle')
   const [updateError, setUpdateError] = useState('')
   const isArabic = i18n.resolvedLanguage !== 'en'
-  const formatMoney = (minor: number) => new Intl.NumberFormat(
+  const formatMoney = (minor: number, currencyCode = 'SAR') => new Intl.NumberFormat(
     isArabic ? 'ar-SA' : 'en-US',
-    { style: 'currency', currency: 'SAR' },
-  ).format(minor / 100)
+    { style: 'currency', currency: currencyCode },
+  ).format(minor / (10 ** (currencies.find((currency) => currency.code === currencyCode)?.minorUnitExponent ?? 2)))
+  const convertInvoiceMinor = (baseMinor: number, currencyCode: string, rateScaled?: number) => {
+    const exponent = currencies.find((currency) => currency.code === currencyCode)?.minorUnitExponent ?? 2
+    const rate = rateScaled === undefined
+      ? currencyCode === 'SAR' ? 1 : parsedExchangeRate
+      : rateScaled / 1_000_000_000
+    if (!Number.isFinite(rate) || rate <= 0) return 0
+    return Math.round(baseMinor / 100 / rate * (10 ** exponent))
+  }
+  const formatInvoiceMoney = (baseMinor: number, currencyCode = saleCurrencyCode, rateScaled?: number) => {
+    if (rateScaled === undefined && currencyCode !== 'SAR' && !isExchangeRateValid) return '—'
+    return formatMoney(convertInvoiceMinor(baseMinor, currencyCode, rateScaled), currencyCode)
+  }
   const formatCompactAmount = (minor: number) => new Intl.NumberFormat(
     isArabic ? 'ar' : 'en',
     { notation: 'compact', maximumFractionDigits: 1 },
   ).format(minor / 100)
   const dailySales = dashboard?.dailySales ?? []
   const chartMax = Math.max(...dailySales.map((day) => day.totalMinor), 0)
+  const invoiceCurrencyExponent = currencies.find((currency) => currency.code === saleCurrencyCode)?.minorUnitExponent ?? 2
+  const parsedExchangeRate = Number(exchangeRate)
+  const exchangeRateScaled = Math.round(parsedExchangeRate * 1_000_000_000)
+  const isExchangeRateValid = saleCurrencyCode === 'SAR'
+    ? true
+    : Number.isFinite(parsedExchangeRate) && parsedExchangeRate > 0
+      && Number.isSafeInteger(exchangeRateScaled) && exchangeRateScaled > 0
+  const invoiceAmounts = saleCart.reduce((totals, line) => {
+    const product = products.find((entry) => entry.id === line.productId)
+    if (!product) return totals
+    const lineSubtotal = line.quantity * product.salePriceMinor
+    const lineDiscount = Math.round(lineSubtotal * line.discountBasisPoints / 10000)
+    totals.subtotal += lineSubtotal
+    totals.discount += lineDiscount
+    return totals
+  }, { subtotal: 0, discount: 0 })
+  const taxableSubtotalMinor = invoiceAmounts.subtotal - invoiceAmounts.discount
+  const invoiceTaxMinor = Math.round(taxableSubtotalMinor * taxRateBasisPoints / 10000)
+  const invoiceTotalBaseMinor = taxableSubtotalMinor + invoiceTaxMinor
+  const invoiceTotalMinor = isExchangeRateValid
+    ? Math.round(invoiceTotalBaseMinor / 100 / parsedExchangeRate * (10 ** invoiceCurrencyExponent))
+    : 0
+  const paymentMethods: Array<Exclude<PaymentMethod, 'mixed'>> = ['cash', 'card', 'bank_transfer']
+  const paymentTotalMinor = paymentMethod === 'mixed'
+    ? paymentMethods.reduce((sum, method) => sum + Math.round((Number(paymentAmounts[method]) || 0) * (10 ** invoiceCurrencyExponent)), 0)
+    : Math.round(
+      (Number(paymentAmounts[paymentMethod] || (invoiceTotalMinor / (10 ** invoiceCurrencyExponent)).toFixed(invoiceCurrencyExponent)) || 0)
+      * (10 ** invoiceCurrencyExponent),
+    )
+  const remainingMinor = Math.max(0, invoiceTotalMinor - paymentTotalMinor)
+  const changeMinor = Math.max(0, paymentTotalMinor - invoiceTotalMinor)
+  const receiptInvoiceTotalMinor = saleReceipt
+    ? convertInvoiceMinor(saleReceipt.totalMinor, saleReceipt.currencyCode, saleReceipt.exchangeRateScaled)
+    : 0
+  const receiptPaidMinor = saleReceipt?.payments.reduce((sum, payment) => sum + payment.amountMinor, 0) ?? 0
+  const receiptChangeMinor = Math.max(0, receiptPaidMinor - receiptInvoiceTotalMinor)
+  const defaultPrinter = printers.find((printer) => printer.isDefault) ?? null
+  const receiptPrinter = printers.find((printer) => printer.id === receiptPrinterId) ?? defaultPrinter
+  const receiptPaperWidth = receiptWidth === 'a4' ? receiptPrinter?.paperWidth ?? '80mm' : receiptWidth
+  const receiptDpi = receiptPrinter?.dpi ?? 203
+  const receiptDots = receiptPaperWidth === '80mm'
+    ? receiptDpi === 203 ? 576 : 850
+    : receiptDpi === 203 ? 384 : 567
+  const receiptPreviewWidth = receiptWidth === 'a4' ? undefined : `${receiptDots / 2}px`
 
   useEffect(() => {
     document.documentElement.lang = isArabic ? 'ar' : 'en'
@@ -226,7 +403,56 @@ function App() {
       void refreshCustomers()
       void refreshSales()
     }
+    if (activePage === 'sales' || activePage === 'settings') void refreshPrinters()
+    if (activePage === 'sales') void refreshPrintJobs()
   }, [activePage])
+
+  useEffect(() => {
+    if (activePage !== 'sales') return
+    let active = true
+    void invoke<CurrencySummary[]>('list_currencies')
+      .then((result) => {
+        if (active) setCurrencies(result)
+      })
+      .catch((error: unknown) => {
+        if (active) setInventoryError(error instanceof Error ? error.message : String(error))
+      })
+    return () => {
+      active = false
+    }
+  }, [activePage])
+
+  useEffect(() => {
+    if (activePage !== 'sales') return
+    const handleSaleShortcut = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setClearInvoiceOpen(false)
+        setRemoveProductId(null)
+        setQuickCustomerOpen(false)
+        return
+      }
+      if (event.key === 'F2') {
+        event.preventDefault()
+        saleSearchRef.current?.focus()
+      } else if (event.key === 'F3') {
+        event.preventDefault()
+        saleCustomerRef.current?.focus()
+      } else if (event.key === 'F4') {
+        event.preventDefault()
+        paymentSectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+        paymentSectionRef.current?.querySelector<HTMLInputElement>('[data-payment-field]')?.focus()
+      } else if (event.key === 'F8') {
+        event.preventDefault()
+        saleFormRef.current?.requestSubmit()
+      } else if (event.key === 'Delete' && selectedSaleProductId !== null) {
+        if (event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement) return
+        event.preventDefault()
+        setRemoveProductId(selectedSaleProductId)
+      }
+    }
+    window.addEventListener('keydown', handleSaleShortcut)
+    return () => window.removeEventListener('keydown', handleSaleShortcut)
+  }, [activePage, selectedSaleProductId])
 
   useEffect(() => {
     if (activePage === 'dashboard') void refreshDashboard()
@@ -249,6 +475,31 @@ function App() {
       active = false
     }
   }, [batchProductId])
+
+  useEffect(() => {
+    sendReceiptRef.current = sendReceiptToPrinter
+  })
+
+  useEffect(() => {
+    if (autoPrintSaleId === null || saleReceipt?.id !== autoPrintSaleId || !defaultPrinter) return
+    if (autoPrintHandledRef.current === autoPrintSaleId) return
+    const print = sendReceiptRef.current
+    if (!print) return
+    autoPrintHandledRef.current = autoPrintSaleId
+    void print(autoPrintSaleId, defaultPrinter)
+  }, [autoPrintSaleId, saleReceipt, defaultPrinter])
+
+  useEffect(() => {
+    if (retryPrintJobId === null || !saleReceipt) return
+    if (retryPrintStartedRef.current === retryPrintJobId) return
+    const job = printJobs.find((entry) => entry.id === retryPrintJobId)
+    const printer = printers.find((entry) => entry.id === job?.printerId)
+    if (!job || !printer || job.saleId !== saleReceipt.id) return
+    const print = sendReceiptRef.current
+    if (!print) return
+    retryPrintStartedRef.current = retryPrintJobId
+    void print(saleReceipt.id, printer, retryPrintJobId)
+  }, [retryPrintJobId, saleReceipt, printJobs, printers])
 
   async function refreshDashboard() {
     try {
@@ -282,6 +533,234 @@ function App() {
     }
   }
 
+  async function refreshPrinters() {
+    try {
+      const result = await invoke<PrinterConfig[]>('list_printers')
+      setPrinters(result)
+      setPrinterForm((current) => result.find((printer) => printer.id === current.id) ?? current)
+      const defaultDevice = result.find((printer) => printer.isDefault)
+      if (defaultDevice) {
+        setReceiptPrinterId((current) => current ?? defaultDevice.id)
+        setReceiptWidth((current) => current === 'a4' ? defaultDevice.paperWidth : current)
+      }
+    } catch (error) {
+      setInventoryError(error instanceof Error ? error.message : String(error))
+    }
+  }
+
+  async function refreshPrintJobs() {
+    try {
+      setPrintJobs(await invoke<PrintJob[]>('list_print_jobs'))
+    } catch (error) {
+      setInventoryError(error instanceof Error ? error.message : String(error))
+    }
+  }
+
+  async function captureReceiptImage(element: HTMLDivElement, printer: PrinterConfig) {
+    await document.fonts?.ready
+    await Promise.all(Array.from(element.querySelectorAll('img')).map((image) => image.decode()))
+    const paperDots = printer.paperWidth === '80mm'
+      ? printer.dpi === 203 ? 576 : 850
+      : printer.dpi === 203 ? 384 : 567
+    const cssWidth = paperDots / 2
+    const oldWidth = element.style.width
+    const oldMaxWidth = element.style.maxWidth
+    const oldPadding = element.style.padding
+    const oldFontSize = element.style.getPropertyValue('--receipt-font-size')
+    element.style.width = `${cssWidth}px`
+    element.style.maxWidth = `${cssWidth}px`
+    element.style.padding = '8px'
+    element.style.setProperty('--receipt-font-size', `${printer.fontSize}px`)
+    try {
+      const image = await toPng(element, {
+        backgroundColor: '#ffffff',
+        cacheBust: true,
+        pixelRatio: 2,
+      })
+      const base64 = image.slice(image.indexOf(',') + 1)
+      if (!base64) throw new Error(t('receiptRasterFailed'))
+      return base64
+    } finally {
+      element.style.width = oldWidth
+      element.style.maxWidth = oldMaxWidth
+      element.style.padding = oldPadding
+      if (oldFontSize) element.style.setProperty('--receipt-font-size', oldFontSize)
+      else element.style.removeProperty('--receipt-font-size')
+    }
+  }
+
+  async function sendReceiptToPrinter(
+    saleId: number,
+    printer: PrinterConfig,
+    retryJobId?: number,
+  ) {
+    if (!isTauri()) {
+      setPrintNotice(t('nativePrinterUnavailable'))
+      return
+    }
+    const receiptElement = receiptRef.current
+    if (!receiptElement) {
+      setPrintNotice(t('receiptRasterFailed'))
+      return
+    }
+    setPrinterBusy(true)
+    setPrintNotice('')
+    try {
+      const pngBase64 = await captureReceiptImage(receiptElement, printer)
+      const job = retryJobId
+        ? await invoke<PrintJob>('retry_print_job', { jobId: retryJobId, pngBase64 })
+        : await invoke<PrintJob>('print_sale_receipt', {
+          saleId,
+          printerId: printer.id,
+          pngBase64,
+        })
+      setPrintNotice(job.status === 'printed' ? t('printSucceeded') : job.lastError || t('printFailed'))
+      await refreshPrintJobs()
+    } catch (error) {
+      setPrintNotice(error instanceof Error ? error.message : String(error))
+    } finally {
+      setPrinterBusy(false)
+    }
+  }
+
+  async function printInvoice() {
+    if (receiptWidth === 'a4') {
+      window.print()
+      return
+    }
+    if (!saleReceipt || !receiptPrinter) {
+      setPrintNotice(t('defaultPrinterRequired'))
+      return
+    }
+    if (receiptWidth !== receiptPrinter.paperWidth) {
+      setPrintNotice(t('printerPaperWidthMismatch'))
+      return
+    }
+    await sendReceiptToPrinter(saleReceipt.id, receiptPrinter)
+  }
+
+  async function testPrint() {
+    if (!isTauri()) {
+      setPrintNotice(t('nativePrinterUnavailable'))
+      return
+    }
+    if (!printerForm.id || !testReceiptRef.current) {
+      setPrintNotice(t('savePrinterBeforeTest'))
+      return
+    }
+    setPrinterBusy(true)
+    setPrintNotice('')
+    try {
+      const pngBase64 = await captureReceiptImage(testReceiptRef.current, printerForm)
+      const job = await invoke<PrintJob>('print_test_page', {
+        printerId: printerForm.id,
+        pngBase64,
+      })
+      setPrintNotice(job.status === 'printed' ? t('printSucceeded') : job.lastError || t('printFailed'))
+      await refreshPrintJobs()
+    } catch (error) {
+      setPrintNotice(error instanceof Error ? error.message : String(error))
+    } finally {
+      setPrinterBusy(false)
+    }
+  }
+
+  async function discoverUsbPrinters() {
+    setPrinterBusy(true)
+    setPrintNotice('')
+    try {
+      const devices = await invoke<UsbPrinter[]>('discover_usb_printers')
+      setUsbPrinters(devices)
+      if (devices.length === 0) setPrintNotice(t('noUsbPrinters'))
+    } catch (error) {
+      setPrintNotice(error instanceof Error ? error.message : String(error))
+    } finally {
+      setPrinterBusy(false)
+    }
+  }
+
+  async function discoverNetworkPrinters() {
+    setPrinterBusy(true)
+    setPrintNotice('')
+    try {
+      const devices = await invoke<NetworkPrinter[]>('discover_network_printers')
+      setNetworkPrinters(devices)
+      if (devices.length === 0) setPrintNotice(t('noNetworkPrinters'))
+    } catch (error) {
+      setPrintNotice(error instanceof Error ? error.message : String(error))
+    } finally {
+      setPrinterBusy(false)
+    }
+  }
+
+  async function savePrinterSettings(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    setInventoryError('')
+    setPrintNotice('')
+    setPrinterBusy(true)
+    try {
+      const id = await invoke<number>('save_printer', {
+        printer: {
+          ...printerForm,
+          host: printerForm.connectionType === 'network' ? printerForm.host : null,
+          port: printerForm.connectionType === 'network' ? printerForm.port : null,
+          vendorId: printerForm.connectionType === 'usb' ? printerForm.vendorId : null,
+          productId: printerForm.connectionType === 'usb' ? printerForm.productId : null,
+        },
+      })
+      const saved = { ...printerForm, id }
+      setPrinterForm(saved)
+      setReceiptPrinterId(id)
+      setReceiptWidth(saved.paperWidth)
+      setPrintNotice(t('printerSaved'))
+      await refreshPrinters()
+    } catch (error) {
+      setInventoryError(error instanceof Error ? error.message : String(error))
+    } finally {
+      setPrinterBusy(false)
+    }
+  }
+
+  async function deletePrinter() {
+    if (!printerForm.id) return
+    setPrinterBusy(true)
+    setPrintNotice('')
+    try {
+      await invoke('remove_printer', { printerId: printerForm.id })
+      setPrinterForm(emptyPrinter)
+      setReceiptPrinterId(null)
+      setPrintNotice(t('printerRemoved'))
+      await refreshPrinters()
+    } catch (error) {
+      setInventoryError(error instanceof Error ? error.message : String(error))
+    } finally {
+      setPrinterBusy(false)
+    }
+  }
+
+  async function retryPrintJob(job: PrintJob) {
+    if (!job.saleId) {
+      setPrintNotice(t('testJobCannotRetry'))
+      return
+    }
+    const printer = printers.find((device) => device.id === job.printerId)
+    if (!printer) {
+      setPrintNotice(t('printerConfigMissing'))
+      return
+    }
+    setReceiptPrinterId(printer.id)
+    setReceiptWidth(printer.paperWidth)
+    retryPrintStartedRef.current = null
+    setPrintNotice('')
+    try {
+      const receipt = await invoke<SaleReceipt>('get_sale', { saleId: job.saleId })
+      setSaleReceipt(receipt)
+      setRetryPrintJobId(job.id)
+    } catch (error) {
+      setPrintNotice(error instanceof Error ? error.message : String(error))
+    }
+  }
+
   async function refreshBatchBalances() {
     if (!batchProductId) return
     try {
@@ -296,13 +775,14 @@ function App() {
 
   async function refreshSetting() {
     try {
-      const keys = ['pharmacy_name', 'pharmacy_address', 'pharmacy_phone', 'pharmacy_tax_number', 'pharmacy_logo']
+      const keys = ['pharmacy_name', 'pharmacy_address', 'pharmacy_phone', 'pharmacy_tax_number', 'pharmacy_logo', 'tax_rate_basis_points']
       const values = await Promise.all(keys.map((key) => invoke<string>('get_setting', { key })))
       setPharmacyName(values[0])
       setPharmacyAddress(values[1])
       setPharmacyPhone(values[2])
       setPharmacyTaxNumber(values[3])
       setPharmacyLogo(values[4])
+      setPharmacyTaxRate(values[5] ? (Number(values[5]) / 100).toString() : '0')
     } catch (error) {
       setInventoryError(error instanceof Error ? error.message : String(error))
     }
@@ -339,6 +819,11 @@ function App() {
   const saveSetting = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
     setInventoryError('')
+    const taxRate = Number(pharmacyTaxRate)
+    if (!Number.isFinite(taxRate) || taxRate < 0 || taxRate > 100) {
+      setInventoryError(t('taxRate'))
+      return
+    }
     try {
       await invoke('set_settings', {
         settings: {
@@ -347,6 +832,7 @@ function App() {
           pharmacy_phone: pharmacyPhone,
           pharmacy_tax_number: pharmacyTaxNumber,
           pharmacy_logo: pharmacyLogo,
+          tax_rate_basis_points: String(Math.round(taxRate * 100)),
         },
       })
     } catch (error) {
@@ -378,63 +864,183 @@ function App() {
 
   const createSale = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
+    if (saleSubmitting) return
     setInventoryError('')
+    if (!saleCart.length) return
+    if (!isExchangeRateValid) {
+      setInventoryError(t('exchangeRateRequired'))
+      return
+    }
+    if (paymentTotalMinor < invoiceTotalMinor || invoiceTotalMinor <= 0) {
+      setInventoryError(t('paymentRequired'))
+      return
+    }
+    const payments = (paymentMethod === 'mixed'
+      ? paymentMethods.map((method) => ({ method, value: paymentAmounts[method] }))
+      : [{
+        method: paymentMethod,
+        value: paymentAmounts[paymentMethod] || (invoiceTotalMinor / (10 ** invoiceCurrencyExponent)).toFixed(invoiceCurrencyExponent),
+      }])
+      .filter(({ value }) => Number(value) > 0)
+      .map(({ method, value }) => ({
+        method,
+        amountMinor: Math.round(Number(value) * (10 ** invoiceCurrencyExponent)),
+        currencyCode: saleCurrencyCode,
+      }))
+    if (!payments.length || payments.some((payment) => !Number.isSafeInteger(payment.amountMinor) || payment.amountMinor <= 0)) {
+      setInventoryError(t('paymentRequired'))
+      return
+    }
+
+    setSaleSubmitting(true)
+    let createdSale: { id: number }
     try {
-      const createdSale = await invoke<{ invoiceNumber: string; totalMinor: number }>('create_sale', {
+      createdSale = await invoke<{ id: number }>('create_sale', {
         customerId: saleCustomerId ? Number(saleCustomerId) : null,
-        items: saleCart.map(({ productId, quantity }) => ({ productId, quantity })),
+        items: saleCart.map(({ productId, quantity, discountBasisPoints }) => ({
+          productId,
+          quantity,
+          discountBasisPoints,
+        })),
         status: 'paid',
+        payments,
+        currencyCode: saleCurrencyCode,
+        exchangeRateScaled: saleCurrencyCode === 'SAR' ? 1_000_000_000 : exchangeRateScaled,
       })
-      setSaleReceipt({
-        ...createdSale,
-        customerName: customers.find((customer) => customer.id === Number(saleCustomerId))?.name ?? null,
-        soldAt: new Date().toISOString(),
-        items: saleCart.flatMap(({ productId, quantity }) => {
-          const product = products.find((entry) => entry.id === productId)
-          return product ? [{
-            productName: isArabic ? product.nameAr : product.nameEn,
-            quantity,
-            unitPriceMinor: product.salePriceMinor,
-            lineTotalMinor: quantity * product.salePriceMinor,
-          }] : []
-        }),
+    } catch (error) {
+      setInventoryError(error instanceof Error ? error.message : String(error))
+      setSaleSubmitting(false)
+      return
+    }
+    setSaleReceipt(null)
+    setSaleCart([])
+    setPaymentAmounts({ cash: '', card: '', bank_transfer: '' })
+    setPaymentMethod('cash')
+    setSaleCurrencyCode('SAR')
+    setExchangeRate('1')
+    setSaleCustomerId('')
+    setQuickCustomerOpen(false)
+    setSaleSearch('')
+    setSaleBarcode('')
+    setSelectedSaleProductId(null)
+    setSaleStartedAt(new Date())
+    setSaleSubmitting(false)
+    await Promise.all([
+      refreshDashboard(),
+      refreshProducts(),
+      refreshSales(),
+    ])
+    let configuredPrinter = defaultPrinter
+    try {
+      const currentPrinters = await invoke<PrinterConfig[]>('list_printers')
+      setPrinters(currentPrinters)
+      configuredPrinter = currentPrinters.find((printer) => printer.isDefault) ?? null
+    } catch (error) {
+      setPrintNotice(error instanceof Error ? error.message : String(error))
+    }
+    try {
+      const receipt = await invoke<SaleReceipt>('get_sale', { saleId: createdSale.id })
+      setSaleReceipt(receipt)
+      if (configuredPrinter?.autoPrint) {
+        setReceiptPrinterId(configuredPrinter.id)
+        setReceiptWidth(configuredPrinter.paperWidth)
+        setAutoPrintSaleId(receipt.id)
+      }
+    } catch {
+      setInventoryError(t('invoiceSavedPrintFailed'))
+    }
+  }
+
+  async function createQuickCustomer() {
+    setInventoryError('')
+    if (!quickCustomerName.trim()) {
+      setInventoryError(t('customerNameRequired'))
+      return
+    }
+    try {
+      const customerId = await invoke<number>('create_customer', {
+        name: quickCustomerName,
+        phone: quickCustomerPhone || null,
       })
-      setSaleCart([])
-      setSaleCustomerId('')
-      await refreshDashboard()
-      await refreshProducts()
-      await refreshSales()
+      await refreshCustomers()
+      setSaleCustomerId(String(customerId))
+      setQuickCustomerName('')
+      setQuickCustomerPhone('')
+      setQuickCustomerOpen(false)
     } catch (error) {
       setInventoryError(error instanceof Error ? error.message : String(error))
     }
   }
 
-  function addToSaleCart(productId: number) {
-    setSaleReceipt(null)
-    setSaleCart((current) => {
-      const existing = current.find((line) => line.productId === productId)
-      const product = products.find((entry) => entry.id === productId)
-      if (!product || !product.salePriceMinor || !product.availableUnits) return current
-      if (existing) {
-        if (existing.quantity >= product.availableUnits) return current
-        return current.map((line) => line.productId === productId
-          ? { ...line, quantity: line.quantity + 1 }
-          : line)
+  async function showSaleDetails(saleId: number) {
+    setInventoryError('')
+    try {
+      setRetryPrintJobId(null)
+      setAutoPrintSaleId(null)
+      setSaleReceipt(await invoke<SaleReceipt>('get_sale', { saleId }))
+      if (defaultPrinter) {
+        setReceiptPrinterId(defaultPrinter.id)
+        setReceiptWidth(defaultPrinter.paperWidth)
       }
-      return [...current, { productId, quantity: 1 }]
-    })
+    } catch (error) {
+      setInventoryError(error instanceof Error ? error.message : String(error))
+    }
   }
 
-  function changeSaleQuantity(productId: number, change: number) {
+  function addScannedBarcode(value: string) {
+    const barcode = value.trim()
+    if (!barcode) return
+    const product = products.find((entry) => entry.barcode === barcode)
+    if (!product) {
+      setInventoryError(t('noSearchResults'))
+      return
+    }
+    addToSaleCart(product.id)
+    setSaleBarcode('')
+  }
+
+  function removeSaleItem(productId: number) {
+    setSaleCart((current) => current.filter((line) => line.productId !== productId))
+    setRemoveProductId(null)
+    if (selectedSaleProductId === productId) setSelectedSaleProductId(null)
+  }
+
+  function clearSaleInvoice() {
+    setSaleCart([])
+    setSaleCustomerId('')
+    setPaymentAmounts({ cash: '', card: '', bank_transfer: '' })
+    setPaymentMethod('cash')
+    setSaleCurrencyCode('SAR')
+    setExchangeRate('1')
     setSaleReceipt(null)
-    setSaleCart((current) => current.flatMap((line) => {
-      if (line.productId !== productId) return [line]
-      const quantity = line.quantity + change
-      const product = products.find((entry) => entry.id === productId)
-      return quantity <= 0 ? [] : product && quantity <= product.availableUnits
-        ? [{ ...line, quantity }]
-        : [line]
-    }))
+    setQuickCustomerOpen(false)
+    setSaleSearch('')
+    setSaleBarcode('')
+    setSelectedSaleProductId(null)
+    setSaleStartedAt(new Date())
+    setClearInvoiceOpen(false)
+  }
+
+  function addToSaleCart(productId: number) {
+    setSaleReceipt(null)
+    const product = products.find((entry) => entry.id === productId)
+    if (!product) return
+    if (!product.availableUnits) {
+      setInventoryError(t('noStockAvailable'))
+      return
+    }
+    if (!product.salePriceMinor) {
+      setInventoryError(t('setProductPrice'))
+      return
+    }
+    const existing = saleCart.find((line) => line.productId === productId)
+    if (existing && existing.quantity >= product.availableUnits) {
+      setInventoryError(t('noStockAvailable'))
+      return
+    }
+    setSaleCart((current) => existing
+      ? current.map((line) => line.productId === productId ? { ...line, quantity: line.quantity + 1 } : line)
+      : [...current, { productId, quantity: 1, discountBasisPoints: 0 }])
   }
 
   async function saveProductPrice(productId: number) {
@@ -1115,6 +1721,10 @@ function App() {
               <label><span>{t('pharmacyAddress')}</span><input value={pharmacyAddress} onChange={(e) => setPharmacyAddress(e.target.value)} /></label>
               <label><span>{t('phone')}</span><input type="tel" value={pharmacyPhone} onChange={(e) => setPharmacyPhone(e.target.value)} /></label>
               <label><span>{t('pharmacyTaxNumber')}</span><input value={pharmacyTaxNumber} onChange={(e) => setPharmacyTaxNumber(e.target.value)} /></label>
+              <label>
+                <span>{t('taxRate')}</span>
+                <input type="number" min="0" max="100" step="0.01" value={pharmacyTaxRate} onChange={(event) => setPharmacyTaxRate(event.target.value)} />
+              </label>
               <label className="logo-upload">
                 <span>{t('pharmacyLogo')}</span>
                 <input type="file" accept="image/png,image/jpeg,image/webp" onChange={(event) => handleLogoUpload(event.target.files?.[0])} />
@@ -1123,6 +1733,135 @@ function App() {
               {pharmacyLogo && <button className="text-button" type="button" onClick={() => setPharmacyLogo('')}>{t('removeLogo')}</button>}
               <button className="primary-button" type="submit">{t('saveSettings')}</button>
             </form>
+            <section className="panel printer-settings-panel">
+              <div className="panel-heading">
+                <div><h3>{t('thermalPrinterSettings')}</h3><p>{t('thermalPrinterDescription')}</p></div>
+                <div className="printer-toolbar">
+                  <select
+                    aria-label={t('savedPrinters')}
+                    value={printerForm.id ?? ''}
+                    onChange={(event) => {
+                      const selected = printers.find((printer) => printer.id === Number(event.target.value))
+                      setPrinterForm(selected ?? emptyPrinter)
+                      if (selected) {
+                        setReceiptPrinterId(selected.id)
+                        setReceiptWidth(selected.paperWidth)
+                      }
+                    }}
+                  >
+                    <option value="">{t('newPrinter')}</option>
+                    {printers.map((printer) => <option key={printer.id ?? printer.name} value={printer.id ?? ''}>{printer.name}{printer.isDefault ? ` · ${t('defaultPrinter')}` : ''}</option>)}
+                  </select>
+                  <button className="text-button" type="button" onClick={() => setPrinterForm(emptyPrinter)}>{t('newPrinter')}</button>
+                </div>
+              </div>
+              <div className="printer-discovery-row">
+                <div className="printer-discovery-actions">
+                  <button className="text-button" type="button" onClick={() => void discoverUsbPrinters()} disabled={printerBusy}>
+                    <Search size={15} />{t('discoverUsbPrinters')}
+                  </button>
+                  <button className="text-button" type="button" onClick={() => void discoverNetworkPrinters()} disabled={printerBusy}>
+                    <Search size={15} />{t('discoverNetworkPrinters')}
+                  </button>
+                </div>
+                <span>{t('usbDiscoveryNote')}</span>
+              </div>
+              {usbPrinters.length > 0 && (
+                <div className="usb-device-list">
+                  {usbPrinters.map((device) => (
+                    <button
+                      className="text-button"
+                      key={`${device.vendorId}-${device.productId}`}
+                      type="button"
+                      onClick={() => setPrinterForm((current) => ({
+                        ...current,
+                        name: current.name || device.name,
+                        connectionType: 'usb',
+                        vendorId: device.vendorId,
+                        productId: device.productId,
+                      }))}
+                    >
+                      {device.name} <small>{device.vendorId.toString(16).padStart(4, '0')}:{device.productId.toString(16).padStart(4, '0')}</small>
+                    </button>
+                  ))}
+                </div>
+              )}
+              {networkPrinters.length > 0 && (
+                <div className="usb-device-list">
+                  {networkPrinters.map((device) => (
+                    <button
+                      className="text-button"
+                      key={`${device.host}-${device.port}`}
+                      type="button"
+                      onClick={() => setPrinterForm((current) => ({
+                        ...current,
+                        name: current.name || device.name,
+                        connectionType: 'network',
+                        host: device.host,
+                        port: device.port,
+                      }))}
+                    >
+                      {device.name} <small>{device.host}:{device.port}</small>
+                    </button>
+                  ))}
+                </div>
+              )}
+              <form className="printer-config-form" onSubmit={(event) => void savePrinterSettings(event)}>
+                <label><span>{t('printerName')}</span><input value={printerForm.name} onChange={(event) => setPrinterForm((current) => ({ ...current, name: event.target.value }))} maxLength={100} required /></label>
+                <label><span>{t('connectionType')}</span>
+                  <select value={printerForm.connectionType} onChange={(event) => setPrinterForm((current) => ({ ...current, connectionType: event.target.value as PrinterConfig['connectionType'] }))}>
+                    <option value="usb">{t('usb')}</option><option value="network">{t('ethernet')}</option>
+                  </select>
+                </label>
+                {printerForm.connectionType === 'usb' ? (
+                  <>
+                    <label><span>{t('usbVendorId')}</span><input type="number" min="0" max="65535" value={printerForm.vendorId ?? ''} onChange={(event) => setPrinterForm((current) => ({ ...current, vendorId: event.target.value === '' ? null : Number(event.target.value) }))} required /></label>
+                    <label><span>{t('usbProductId')}</span><input type="number" min="0" max="65535" value={printerForm.productId ?? ''} onChange={(event) => setPrinterForm((current) => ({ ...current, productId: event.target.value === '' ? null : Number(event.target.value) }))} required /></label>
+                  </>
+                ) : (
+                  <>
+                    <label><span>{t('printerIp')}</span><input value={printerForm.host ?? ''} onChange={(event) => setPrinterForm((current) => ({ ...current, host: event.target.value || null }))} placeholder="192.168.1.100" required /></label>
+                    <label><span>{t('printerPort')}</span><input type="number" min="1" max="65535" value={printerForm.port ?? 9100} onChange={(event) => setPrinterForm((current) => ({ ...current, port: Number(event.target.value) || null }))} required /></label>
+                  </>
+                )}
+                <label><span>{t('paperWidth')}</span>
+                  <select value={printerForm.paperWidth} onChange={(event) => setPrinterForm((current) => ({ ...current, paperWidth: event.target.value as PrinterConfig['paperWidth'] }))}>
+                    <option value="80mm">{t('paper80mm')}</option><option value="58mm">{t('paper58mm')}</option>
+                  </select>
+                </label>
+                <label><span>{t('printResolution')}</span>
+                  <select value={printerForm.dpi} onChange={(event) => setPrinterForm((current) => ({ ...current, dpi: Number(event.target.value) as PrinterConfig['dpi'] }))}>
+                    <option value={203}>203 DPI</option><option value={300}>300 DPI</option>
+                  </select>
+                </label>
+                <label><span>{t('printCopies')}</span><input type="number" min="1" max="5" value={printerForm.copies} onChange={(event) => setPrinterForm((current) => ({ ...current, copies: Number(event.target.value) || 1 }))} /></label>
+                <label><span>{t('receiptFontSize')}</span><input type="number" min="8" max="32" value={printerForm.fontSize} onChange={(event) => setPrinterForm((current) => ({ ...current, fontSize: Number(event.target.value) || 12 }))} /></label>
+                <label className="printer-checkbox"><input type="checkbox" checked={printerForm.autoCut} onChange={(event) => setPrinterForm((current) => ({ ...current, autoCut: event.target.checked }))} /><span>{t('autoCutPaper')}</span></label>
+                <label className="printer-checkbox"><input type="checkbox" checked={printerForm.autoPrint} onChange={(event) => setPrinterForm((current) => ({ ...current, autoPrint: event.target.checked }))} /><span>{t('autoPrint')}</span></label>
+                <label className="printer-checkbox"><input type="checkbox" checked={printerForm.printLogo} onChange={(event) => setPrinterForm((current) => ({ ...current, printLogo: event.target.checked }))} /><span>{t('printPharmacyLogo')}</span></label>
+                <label className="printer-checkbox"><input type="checkbox" checked={printerForm.isDefault} onChange={(event) => setPrinterForm((current) => ({ ...current, isDefault: event.target.checked }))} /><span>{t('setAsDefaultPrinter')}</span></label>
+                <div className="printer-form-actions">
+                  <button className="primary-button" type="submit" disabled={printerBusy}>{t('savePrinter')}</button>
+                  <button className="text-button" type="button" onClick={() => void testPrint()} disabled={printerBusy || !printerForm.id}>{t('testPrint')}</button>
+                  {printerForm.id && <button className="danger-button" type="button" onClick={() => void deletePrinter()} disabled={printerBusy}>{t('removePrinter')}</button>}
+                </div>
+              </form>
+              {printNotice && <p className="printer-notice" role="status">{printNotice}</p>}
+            </section>
+            <div className="thermal-test-source" aria-hidden="true">
+              <div ref={testReceiptRef} className={`print-receipt receipt-${printerForm.paperWidth}`} dir={isArabic ? 'rtl' : 'ltr'}>
+                <header className="receipt-header">
+                  {printerForm.printLogo && pharmacyLogo && <img className="receipt-logo" src={pharmacyLogo} alt="" />}
+                  <div className="receipt-pharmacy"><h2>{pharmacyName || t('pharmacyName')}</h2>{pharmacyAddress && <p>{pharmacyAddress}</p>}{pharmacyPhone && <p>{pharmacyPhone}</p>}</div>
+                </header>
+                <h3 className="printer-test-title">{t('testPrint')}</h3>
+                <p>{t('printerArabicSample')}</p>
+                <p>{printerTestTime.toLocaleString(isArabic ? 'ar' : 'en')}</p>
+                <div className="receipt-code-preview"><Barcode value="TEST-12345" height={32} width={1} fontSize={10} displayValue /></div>
+                <div className="receipt-code-preview"><QRCodeSVG value="Dawai thermal printer test" size={76} /></div>
+                <footer className="receipt-footer">{t('printerTestFooter')}</footer>
+              </div>
+            </div>
           </section>
         ) : activePage === 'sales' || activePage === 'reports' ? (
           <section className="page-content inventory-page">
@@ -1138,102 +1877,432 @@ function App() {
               <>
                 <div className="pos-layout">
                   <section className="panel pos-catalog">
-                    <div className="panel-heading"><div><h3>{t('posProducts')}</h3><p>{t('posProductsDescription')}</p></div></div>
-                    <label className="product-search">
-                      <Search size={16} />
-                      <input aria-label={t('searchProducts')} value={saleSearch} onChange={(event) => setSaleSearch(event.target.value)} placeholder={t('searchProducts')} />
+                    <div className="panel-heading">
+                      <div><h3>{t('posProducts')}</h3><p>{t('posProductsDescription')}</p></div>
+                      <span className="inventory-count">{products.length}</span>
+                    </div>
+                    <label className="product-search sale-search">
+                      <Search size={18} />
+                      <input
+                        ref={saleSearchRef}
+                        aria-label={t('searchProducts')}
+                        value={saleSearch}
+                        onChange={(event) => setSaleSearch(event.target.value)}
+                        onKeyDown={(event) => {
+                          if (event.key !== 'Enter') return
+                          event.preventDefault()
+                          const query = saleSearch.trim().toLocaleLowerCase()
+                          const exact = products.find((product) =>
+                            product.barcode?.toLocaleLowerCase() === query
+                            || product.sku.toLocaleLowerCase() === query)
+                          const matches = products.filter((product) =>
+                            [product.nameAr, product.nameEn, product.sku, product.barcode ?? '']
+                              .some((value) => value.toLocaleLowerCase().includes(query)))
+                          const selectedProduct = exact ?? (matches.length === 1 ? matches[0] : undefined)
+                          if (selectedProduct) {
+                            addToSaleCart(selectedProduct.id)
+                            setSaleSearch('')
+                          }
+                        }}
+                        placeholder={t('searchProducts')}
+                      />
+                      <kbd>F2</kbd>
                     </label>
-                    <div className="pos-product-grid">
-                      {products.filter((product) => {
-                        const query = saleSearch.trim().toLocaleLowerCase()
-                        return !query || [product.nameAr, product.nameEn, product.sku, product.barcode ?? '']
-                          .some((value) => value.toLocaleLowerCase().includes(query))
-                      }).map((product) => (
-                        <button
-                          className="pos-product-card"
-                          type="button"
-                          key={product.id}
-                          onClick={() => addToSaleCart(product.id)}
-                          disabled={product.availableUnits === 0 || product.salePriceMinor <= 0}
-                        >
-                          <strong>{isArabic ? product.nameAr : product.nameEn}</strong>
-                          <span>{product.sku} · {product.availableUnits} {t('availableUnits')}</span>
-                          <b>{formatMoney(product.salePriceMinor)}</b>
-                          {product.salePriceMinor <= 0 && <small>{t('setProductPrice')}</small>}
-                        </button>
-                      ))}
-                      {products.length === 0 && <p className="inventory-empty">{t('noProducts')}</p>}
+                    <label className="product-search barcode-search">
+                      <ScanLine size={18} />
+                      <input
+                        ref={saleBarcodeRef}
+                        aria-label={t('scanBarcode')}
+                        value={saleBarcode}
+                        onChange={(event) => setSaleBarcode(event.target.value)}
+                        onKeyDown={(event) => {
+                          if (event.key === 'Enter') {
+                            event.preventDefault()
+                            addScannedBarcode(saleBarcode)
+                          }
+                        }}
+                        placeholder={t('scanBarcode')}
+                      />
+                    </label>
+                    <div className="pos-product-table table-scroll">
+                      <table>
+                        <thead>
+                          <tr>
+                            <th>{t('product')}</th>
+                            <th>{t('barcode')}</th>
+                            <th>{t('unitPrice')}</th>
+                            <th>{t('availableUnits')}</th>
+                            <th>{t('nearestExpiry')}</th>
+                            <th>{t('addToInvoice')}</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {products.filter((product) => {
+                            const query = saleSearch.trim().toLocaleLowerCase()
+                            return !query || [product.nameAr, product.nameEn, product.sku, product.barcode ?? '']
+                              .some((value) => value.toLocaleLowerCase().includes(query))
+                          }).map((product) => (
+                            <tr key={product.id}>
+                              <td>
+                                <strong>{isArabic ? product.nameAr : product.nameEn}</strong>
+                                <small>{product.sku}</small>
+                              </td>
+                              <td>{product.barcode || '—'}</td>
+                              <td>{formatInvoiceMoney(product.salePriceMinor)}</td>
+                              <td>
+                                <span className={product.availableUnits <= product.reorderLevelUnits ? 'stock-low' : 'stock-ok'}>
+                                  {product.availableUnits}
+                                </span>
+                                {product.availableUnits <= product.reorderLevelUnits && <small className="stock-warning">{t('stockLow')}</small>}
+                              </td>
+                              <td>{product.nearestExpiryDate || '—'}</td>
+                              <td>
+                                <button
+                                  className="icon-button pos-add-button"
+                                  type="button"
+                                  aria-label={`${t('addToInvoice')} ${isArabic ? product.nameAr : product.nameEn}`}
+                                  onClick={() => addToSaleCart(product.id)}
+                                  disabled={product.availableUnits === 0 || product.salePriceMinor <= 0}
+                                >
+                                  <Plus size={17} />
+                                </button>
+                              </td>
+                            </tr>
+                          ))}
+                          {products.length === 0 && !inventoryLoading && (
+                            <tr><td colSpan={6} className="inventory-empty">{t('noProducts')}</td></tr>
+                          )}
+                          {products.length > 0 && !products.some((product) => {
+                            const query = saleSearch.trim().toLocaleLowerCase()
+                            return !query || [product.nameAr, product.nameEn, product.sku, product.barcode ?? '']
+                              .some((value) => value.toLocaleLowerCase().includes(query))
+                          }) && (
+                            <tr><td colSpan={6} className="inventory-empty">{t('noSearchResults')}</td></tr>
+                          )}
+                        </tbody>
+                      </table>
                     </div>
                   </section>
-                  <form className="panel pos-cart" onSubmit={createSale}>
-                    <div className="panel-heading"><div><h3>{t('currentSale')}</h3><p>{t('invoiceAutoGenerated')}</p></div></div>
-                    <label><span>{t('customer')}</span><select value={saleCustomerId} onChange={(event) => setSaleCustomerId(event.target.value)}><option value="">-</option>{customers.map((customer) => <option key={customer.id} value={customer.id}>{customer.name}</option>)}</select></label>
-                    <div className="pos-cart-items">
-                      {saleCart.map(({ productId, quantity }) => {
-                        const product = products.find((entry) => entry.id === productId)
-                        if (!product) return null
-                        return (
-                          <div className="pos-cart-line" key={productId}>
-                            <div className="pos-cart-product">
-                              <strong>{isArabic ? product.nameAr : product.nameEn}</strong>
-                              <span>{formatMoney(product.salePriceMinor)} · {formatMoney(product.salePriceMinor * quantity)}</span>
-                            </div>
-                            <div className="quantity-control">
-                              <button type="button" aria-label={t('decreaseQuantity')} onClick={() => changeSaleQuantity(productId, -1)}><Minus size={14} /></button>
-                              <span>{quantity}</span>
-                              <button type="button" aria-label={t('increaseQuantity')} onClick={() => changeSaleQuantity(productId, 1)} disabled={quantity >= product.availableUnits}><Plus size={14} /></button>
-                            </div>
-                          </div>
-                        )
-                      })}
-                      {saleCart.length === 0 && <p className="inventory-empty">{t('emptySaleCart')}</p>}
+                  <form ref={saleFormRef} className="panel pos-cart" onSubmit={createSale}>
+                    <div className="panel-heading pos-invoice-heading">
+                      <div><h3>{t('currentSale')}</h3><p>{t('invoiceNumberPending')}</p></div>
+                      <button className="text-button clear-invoice-button" type="button" onClick={() => setClearInvoiceOpen(true)} disabled={!saleCart.length}>
+                        <Trash2 size={16} />{t('clearInvoice')}
+                      </button>
                     </div>
-                    <div className="pos-total">
-                      <span>{t('total')}</span>
-                      <strong>{formatMoney(saleCart.reduce((total, line) => {
-                        const product = products.find((entry) => entry.id === line.productId)
-                        return total + line.quantity * (product?.salePriceMinor ?? 0)
-                      }, 0))}</strong>
+                    <div className="invoice-meta">
+                      <div><span>{t('invoice')}</span><strong>—</strong></div>
+                      <div><span>{t('invoiceTime')}</span><strong>{saleStartedAt.toLocaleString(isArabic ? 'ar' : 'en')}</strong></div>
                     </div>
-                    <button className="primary-button" type="submit" disabled={saleCart.length === 0}>{t('saveSale')}</button>
+                    <div className="customer-picker">
+                      <label>
+                        <span>{t('customer')}</span>
+                        <select ref={saleCustomerRef} value={saleCustomerId} onChange={(event) => setSaleCustomerId(event.target.value)}>
+                          <option value="">{t('cashCustomer')}</option>
+                          {customers.map((customer) => <option key={customer.id} value={customer.id}>{customer.name}</option>)}
+                        </select>
+                      </label>
+                      <button className="icon-button" type="button" aria-label={t('addCustomerInline')} onClick={() => {
+                        setQuickCustomerOpen(true)
+                        window.setTimeout(() => quickCustomerInputRef.current?.focus(), 0)
+                      }}>
+                        <UserRoundPlus size={18} />
+                      </button>
+                    </div>
+                    {quickCustomerOpen && (
+                      <div className="quick-customer-form">
+                        <label><span>{t('customerName')}</span><input ref={quickCustomerInputRef} value={quickCustomerName} onChange={(event) => setQuickCustomerName(event.target.value)} required /></label>
+                        <label><span>{t('phone')}</span><input type="tel" value={quickCustomerPhone} onChange={(event) => setQuickCustomerPhone(event.target.value)} /></label>
+                        <div className="quick-customer-actions">
+                          <button className="text-button" type="button" onClick={() => setQuickCustomerOpen(false)}>{t('cancel')}</button>
+                          <button className="primary-button" type="button" onClick={() => void createQuickCustomer()}>{t('addCustomerInline')}</button>
+                        </div>
+                      </div>
+                    )}
+                    <div className="pos-cart-items table-scroll">
+                      <table className="invoice-items-table">
+                        <thead>
+                          <tr><th>{t('product')}</th><th>{t('quantityUnits')}</th><th>{t('unitPrice')}</th><th>{t('lineDiscount')}</th><th>{t('amount')}</th><th aria-label={t('removeItem')} /></tr>
+                        </thead>
+                        <tbody>
+                          {saleCart.map((line) => {
+                            const product = products.find((entry) => entry.id === line.productId)
+                            if (!product) return null
+                            const lineSubtotal = line.quantity * product.salePriceMinor
+                            const lineDiscount = Math.round(lineSubtotal * line.discountBasisPoints / 10000)
+                            const lineTotal = lineSubtotal - lineDiscount
+                            return (
+                              <tr
+                                key={line.productId}
+                                className={selectedSaleProductId === line.productId ? 'is-selected' : ''}
+                                onClick={() => setSelectedSaleProductId(line.productId)}
+                                onFocus={() => setSelectedSaleProductId(line.productId)}
+                              >
+                                <td><strong>{isArabic ? product.nameAr : product.nameEn}</strong><small>{product.sku}</small></td>
+                                <td>
+                                  <input
+                                    className="quantity-input"
+                                    aria-label={`${t('quantityUnits')} ${isArabic ? product.nameAr : product.nameEn}`}
+                                    type="number"
+                                    min="1"
+                                    max={product.availableUnits}
+                                    step="1"
+                                    value={line.quantity}
+                                    onChange={(event) => {
+                                      const quantity = event.target.value === ''
+                                        ? 0
+                                        : Math.min(product.availableUnits, Math.max(0, Number(event.target.value) || 0))
+                                      setSaleCart((current) => current.map((entry) => entry.productId === line.productId ? { ...entry, quantity } : entry))
+                                    }}
+                                    onBlur={() => {
+                                      if (line.quantity < 1) setSaleCart((current) => current.map((entry) => entry.productId === line.productId ? { ...entry, quantity: 1 } : entry))
+                                    }}
+                                  />
+                                </td>
+                                <td>{formatInvoiceMoney(product.salePriceMinor)}</td>
+                                <td>
+                                  <input
+                                    className="discount-input"
+                                    aria-label={`${t('lineDiscount')} ${isArabic ? product.nameAr : product.nameEn}`}
+                                    type="number"
+                                    min="0"
+                                    max="99.99"
+                                    step="0.01"
+                                    value={(line.discountBasisPoints / 100).toString()}
+                                    onChange={(event) => {
+                                      const discountBasisPoints = Math.max(0, Math.min(9999, Math.round((Number(event.target.value) || 0) * 100)))
+                                      setSaleCart((current) => current.map((entry) => entry.productId === line.productId
+                                        ? { ...entry, discountBasisPoints }
+                                        : entry))
+                                    }}
+                                  />
+                                </td>
+                                <td><strong>{formatInvoiceMoney(lineTotal)}</strong></td>
+                                <td>
+                                  <button className="icon-button remove-item-button" type="button" aria-label={`${t('removeItem')} ${isArabic ? product.nameAr : product.nameEn}`} onClick={() => setRemoveProductId(product.id)}>
+                                    <X size={15} />
+                                  </button>
+                                </td>
+                              </tr>
+                            )
+                          })}
+                          {saleCart.length === 0 && <tr><td colSpan={6} className="inventory-empty">{t('emptySaleCart')}</td></tr>}
+                        </tbody>
+                      </table>
+                    </div>
+                    <div className="invoice-summary">
+                      <div><span>{t('itemCount')}</span><strong>{saleCart.length}</strong></div>
+                      <div><span>{t('totalQuantity')}</span><strong>{saleCart.reduce((sum, line) => sum + line.quantity, 0)}</strong></div>
+                      <div><span>{t('subtotal')}</span><strong>{formatInvoiceMoney(invoiceAmounts.subtotal)}</strong></div>
+                      <div><span>{t('discounts')}</span><strong>{formatInvoiceMoney(invoiceAmounts.discount)}</strong></div>
+                      <div><span>{t('vat')} ({(taxRateBasisPoints / 100).toFixed(2)}%)</span><strong>{formatInvoiceMoney(invoiceTaxMinor)}</strong></div>
+                      <div className="invoice-grand-total"><span>{t('netTotal')}</span><strong>{formatMoney(invoiceTotalMinor, saleCurrencyCode)}</strong></div>
+                    </div>
+                    <section className="payment-section" ref={paymentSectionRef} tabIndex={-1}>
+                      <div className="payment-heading"><h4>{t('paymentMethods')}</h4><kbd>F4</kbd></div>
+                      <div className="currency-settings">
+                        <label>
+                          <span>{t('currency')}</span>
+                          <select value={saleCurrencyCode} onChange={(event) => {
+                            const code = event.target.value
+                            setSaleCurrencyCode(code)
+                            setExchangeRate(code === 'SAR' ? '1' : '')
+                          }}>
+                            {currencies.map((currency) => (
+                              <option key={currency.code} value={currency.code}>
+                                {currency.code} · {new Intl.DisplayNames([isArabic ? 'ar' : 'en'], { type: 'currency' }).of(currency.code) ?? currency.name}
+                              </option>
+                            ))}
+                          </select>
+                        </label>
+                        <label>
+                          <span>{t('exchangeRate')}</span>
+                          <input
+                            type="number"
+                            min={saleCurrencyCode === 'SAR' ? '1' : '0.000000001'}
+                            step="any"
+                            value={exchangeRate}
+                            onChange={(event) => setExchangeRate(event.target.value)}
+                            disabled={saleCurrencyCode === 'SAR'}
+                            aria-describedby="exchange-rate-help"
+                          />
+                          {saleCurrencyCode !== 'SAR' && <small id="exchange-rate-help">{t('exchangeRateHelp')}</small>}
+                          {saleCurrencyCode !== 'SAR' && !isExchangeRateValid && <small className="stock-warning">{t('exchangeRateRequired')}</small>}
+                        </label>
+                      </div>
+                      <div className="payment-methods">
+                        {(['cash', 'card', 'bank_transfer', 'mixed'] as PaymentMethod[]).map((method) => {
+                          const Icon = method === 'cash' ? DollarSign : method === 'card' ? CreditCard : method === 'bank_transfer' ? Landmark : ScanLine
+                          return (
+                            <button
+                              className={`payment-method ${paymentMethod === method ? 'is-active' : ''}`}
+                              type="button"
+                              key={method}
+                              aria-pressed={paymentMethod === method}
+                              onClick={() => setPaymentMethod(method)}
+                            >
+                              <Icon size={17} /><span>{t(method === 'bank_transfer' ? 'bankTransfer' : method === 'mixed' ? 'mixedPayment' : method)}</span>
+                            </button>
+                          )
+                        })}
+                      </div>
+                      {paymentMethod === 'mixed' ? (
+                        <div className="mixed-payment-fields">
+                          {paymentMethods.map((method) => (
+                            <label key={method}>
+                              <span>{t(method === 'bank_transfer' ? 'bankTransfer' : method)}</span>
+                              <input data-payment-field type="number" min="0" step="any" value={paymentAmounts[method]} onChange={(event) => setPaymentAmounts((current) => ({ ...current, [method]: event.target.value }))} />
+                            </label>
+                          ))}
+                        </div>
+                      ) : (
+                        <label className="payment-amount-field">
+                          <span>{t('paidAmount')}</span>
+                          <input
+                            type="number"
+                            data-payment-field
+                            min="0"
+                            step="any"
+                            value={paymentAmounts[paymentMethod]}
+                            placeholder={(invoiceTotalMinor / (10 ** invoiceCurrencyExponent)).toFixed(invoiceCurrencyExponent)}
+                            onChange={(event) => setPaymentAmounts((current) => ({ ...current, [paymentMethod]: event.target.value }))}
+                          />
+                        </label>
+                      )}
+                      <div className="payment-balance">
+                        <div><span>{t('remainingAmount')}</span><strong>{formatMoney(remainingMinor, saleCurrencyCode)}</strong></div>
+                        <div><span>{t('changeDue')}</span><strong>{formatMoney(changeMinor, saleCurrencyCode)}</strong></div>
+                      </div>
+                    </section>
+                    <button className="primary-button complete-sale-button" type="submit" disabled={saleSubmitting || !saleCart.length || saleCart.some((line) => line.quantity < 1) || !isExchangeRateValid || paymentTotalMinor < invoiceTotalMinor}>
+                      {saleSubmitting ? t('loading') : t('completeSale')}<span>F8</span>
+                    </button>
                   </form>
                 </div>
                 {saleReceipt && (
                   <section className="panel receipt-panel">
                     <div className="receipt-actions">
-                      <h3>{t('saleSaved')}</h3>
-                      <button className="primary-button" type="button" onClick={() => window.print()}><Printer size={16} />{t('printInvoice')}</button>
+                      <h3>{t('saleSaved')}: {saleReceipt.invoiceNumber}</h3>
+                      <label><span>{t('printWidth')}</span><select value={receiptWidth} disabled={printerBusy} onChange={(event) => setReceiptWidth(event.target.value as typeof receiptWidth)}>
+                        <option value="a4">{t('paperA4')}</option><option value="80mm">{t('paper80mm')}</option><option value="58mm">{t('paper58mm')}</option>
+                      </select></label>
+                      <button className="primary-button" type="button" onClick={() => void printInvoice()} disabled={printerBusy}><Printer size={16} />{t('printInvoice')}</button>
                     </div>
-                    <div className="print-receipt" dir={isArabic ? 'rtl' : 'ltr'}>
-                      {pharmacyLogo && <img className="receipt-logo" src={pharmacyLogo} alt={t('pharmacyLogo')} />}
-                      <h2>{pharmacyName || t('pharmacyName')}</h2>
-                      {pharmacyAddress && <p>{pharmacyAddress}</p>}
-                      {pharmacyPhone && <p>{t('phone')}: {pharmacyPhone}</p>}
-                      {pharmacyTaxNumber && <p>{t('pharmacyTaxNumber')}: {pharmacyTaxNumber}</p>}
-                      <hr />
-                      <p><strong>{t('invoice')}:</strong> {saleReceipt.invoiceNumber}</p>
-                      <p><strong>{t('date')}:</strong> {new Date(saleReceipt.soldAt).toLocaleString(isArabic ? 'ar' : 'en')}</p>
-                      <p><strong>{t('customer')}:</strong> {saleReceipt.customerName ?? t('cashCustomer')}</p>
-                      <div className="table-scroll"><table>
-                        <thead><tr><th>{t('product')}</th><th>{t('quantityUnits')}</th><th>{t('unitPrice')}</th><th>{t('amount')}</th></tr></thead>
+                    <div
+                      ref={receiptRef}
+                      className={`print-receipt receipt-${receiptWidth}`}
+                      dir={isArabic ? 'rtl' : 'ltr'}
+                      style={{
+                        width: receiptPreviewWidth,
+                        maxWidth: receiptPreviewWidth,
+                        padding: receiptWidth === 'a4' ? undefined : '8px',
+                        fontSize: `${receiptPrinter?.fontSize ?? 12}px`,
+                      }}
+                    >
+                      <header className="receipt-header">
+                        {(receiptWidth === 'a4' || receiptPrinter?.printLogo) && pharmacyLogo && <img className="receipt-logo" src={pharmacyLogo} alt={t('pharmacyLogo')} />}
+                        <div className="receipt-pharmacy">
+                          <h2>{pharmacyName || t('pharmacyName')}</h2>
+                          {pharmacyAddress && <p>{pharmacyAddress}</p>}
+                          {pharmacyPhone && <p>{t('phone')}: {pharmacyPhone}</p>}
+                          {pharmacyTaxNumber && <p>{t('pharmacyTaxNumber')}: {pharmacyTaxNumber}</p>}
+                        </div>
+                      </header>
+                      <div className="receipt-meta">
+                        <div><span>{t('invoice')}</span><strong>{saleReceipt.invoiceNumber}</strong></div>
+                        <div><span>{t('date')}</span><strong>{new Date(saleReceipt.soldAt).toLocaleString(isArabic ? 'ar' : 'en')}</strong></div>
+                        <div><span>{t('customer')}</span><strong>{saleReceipt.customerName ?? t('cashCustomer')}</strong></div>
+                        <div><span>{t('paymentMethod')}</span><strong>{saleReceipt.payments.map((payment) => t(payment.method === 'bank_transfer' ? 'bankTransfer' : payment.method)).join(' · ')}</strong></div>
+                      </div>
+                      <div className="table-scroll receipt-items-scroll"><table className="receipt-items">
+                        <thead><tr><th>{t('product')}</th><th>{t('discounts')}</th><th>{t('amount')}</th></tr></thead>
                         <tbody>{saleReceipt.items.map((item, index) => (
-                          <tr key={`${item.productName}-${index}`}><td>{item.productName}</td><td>{item.quantity}</td><td>{formatMoney(item.unitPriceMinor)}</td><td>{formatMoney(item.lineTotalMinor)}</td></tr>
+                          <tr key={`${item.productNameAr}-${index}`}>
+                            <td>
+                              <strong>{isArabic ? item.productNameAr : item.productNameEn}</strong>
+                              <small>{item.quantity} × {formatInvoiceMoney(item.unitPriceMinor, saleReceipt.currencyCode, saleReceipt.exchangeRateScaled)}</small>
+                            </td>
+                            <td>{formatInvoiceMoney(item.discountMinor, saleReceipt.currencyCode, saleReceipt.exchangeRateScaled)}</td>
+                            <td><strong>{formatInvoiceMoney(item.lineTotalMinor, saleReceipt.currencyCode, saleReceipt.exchangeRateScaled)}</strong></td>
+                          </tr>
                         ))}</tbody>
                       </table></div>
-                      <h3>{t('total')}: {formatMoney(saleReceipt.totalMinor)}</h3>
+                      <div className="receipt-totals">
+                        <p>{t('subtotal')}: {formatInvoiceMoney(saleReceipt.subtotalMinor, saleReceipt.currencyCode, saleReceipt.exchangeRateScaled)}</p>
+                        <p>{t('discounts')}: {formatInvoiceMoney(saleReceipt.discountMinor, saleReceipt.currencyCode, saleReceipt.exchangeRateScaled)}</p>
+                        <p>{t('vat')} ({(saleReceipt.taxRateBasisPoints / 100).toFixed(2)}%): {formatInvoiceMoney(saleReceipt.taxMinor, saleReceipt.currencyCode, saleReceipt.exchangeRateScaled)}</p>
+                        <h3>{t('total')}: {formatInvoiceMoney(saleReceipt.totalMinor, saleReceipt.currencyCode, saleReceipt.exchangeRateScaled)}</h3>
+                        <p>{t('paidAmount')}: {formatMoney(receiptPaidMinor, saleReceipt.currencyCode)}</p>
+                        {receiptChangeMinor > 0 && <p>{t('changeDue')}: {formatMoney(receiptChangeMinor, saleReceipt.currencyCode)}</p>}
+                      </div>
+                      <div className="receipt-code-row">
+                        <div className="receipt-code-preview"><Barcode value={saleReceipt.invoiceNumber} height={36} width={1} fontSize={9} displayValue /></div>
+                        <div className="receipt-code-preview"><QRCodeSVG value={saleReceipt.invoiceNumber} size={72} /></div>
+                      </div>
+                      <footer className="receipt-footer">{isArabic ? 'شكرًا لزيارتكم' : 'Thank you for your visit'}</footer>
                     </div>
+                    {printNotice && <p className="printer-notice" role="status">{printNotice}</p>}
                   </section>
+                )}
+                {clearInvoiceOpen && (
+                  <div className="pos-modal-backdrop" role="presentation" onMouseDown={(event) => {
+                    if (event.target === event.currentTarget) setClearInvoiceOpen(false)
+                  }}>
+                    <div className="pos-confirm-dialog" role="alertdialog" aria-modal="true" aria-labelledby="clear-invoice-title">
+                      <h3 id="clear-invoice-title">{t('clearInvoice')}</h3>
+                      <p>{t('confirmClearInvoice')}</p>
+                      <div><button className="text-button" type="button" onClick={() => setClearInvoiceOpen(false)}>{t('cancel')}</button><button className="danger-button" type="button" onClick={clearSaleInvoice}>{t('confirm')}</button></div>
+                    </div>
+                  </div>
+                )}
+                {removeProductId !== null && (
+                  <div className="pos-modal-backdrop" role="presentation" onMouseDown={(event) => {
+                    if (event.target === event.currentTarget) setRemoveProductId(null)
+                  }}>
+                    <div className="pos-confirm-dialog" role="alertdialog" aria-modal="true" aria-labelledby="remove-item-title">
+                      <h3 id="remove-item-title">{t('removeItem')}</h3>
+                      <p>{t('confirmRemoveItem')}</p>
+                      <div><button className="text-button" type="button" onClick={() => setRemoveProductId(null)}>{t('cancel')}</button><button className="danger-button" type="button" onClick={() => removeSaleItem(removeProductId)}>{t('confirm')}</button></div>
+                    </div>
+                  </div>
                 )}
               </>
             )}
             <section className="panel inventory-products">
-              <div className="table-scroll"><table><thead><tr><th>{t('invoice')}</th><th>{t('customer')}</th><th>{t('date')}</th><th>{t('amount')}</th><th>{t('status')}</th></tr></thead>
+              <div className="panel-heading"><h3>{t('invoiceHistory')}</h3></div>
+              <div className="table-scroll"><table><thead><tr><th>{t('invoice')}</th><th>{t('customer')}</th><th>{t('date')}</th><th>{t('amount')}</th><th>{t('paymentMethod')}</th><th>{t('status')}</th><th>{t('viewDetails')}</th></tr></thead>
                 <tbody>{sales.map((sale) => (
-                  <tr key={sale.id}><td>{sale.invoiceNumber}</td><td>{sale.customerName ?? t('cashCustomer')}</td><td>{new Date(sale.soldAt).toLocaleString(isArabic ? 'ar' : 'en')}</td><td>{formatMoney(sale.totalMinor)}</td><td>{t(sale.status)}</td></tr>
+                  <tr key={sale.id}>
+                    <td>{sale.invoiceNumber}</td><td>{sale.customerName ?? t('cashCustomer')}</td>
+                    <td>{new Date(sale.soldAt).toLocaleString(isArabic ? 'ar' : 'en')}</td>
+                    <td>{formatInvoiceMoney(sale.totalMinor, sale.currencyCode, sale.exchangeRateScaled)}</td>
+                    <td>{sale.paymentMethod ? t(sale.paymentMethod === 'bank_transfer' ? 'bankTransfer' : sale.paymentMethod === 'mixed' ? 'mixedPayment' : sale.paymentMethod) : '—'}</td>
+                    <td>{t(sale.status)}</td>
+                    <td><button className="icon-button" type="button" aria-label={`${t('viewDetails')} ${sale.invoiceNumber}`} onClick={() => void showSaleDetails(sale.id)}><Eye size={16} /></button></td>
+                  </tr>
                 ))}
-                {sales.length === 0 && <tr><td colSpan={5} className="inventory-empty">{t('noTransactions')}</td></tr>}</tbody>
+                {sales.length === 0 && <tr><td colSpan={7} className="inventory-empty">{t('noTransactions')}</td></tr>}</tbody>
               </table></div>
             </section>
+            {activePage === 'sales' && (
+              <section className="panel print-history-panel">
+                <div className="panel-heading"><div><h3>{t('printHistory')}</h3><p>{t('printHistoryDescription')}</p></div></div>
+                <div className="table-scroll"><table><thead><tr><th>{t('invoice')}</th><th>{t('printerName')}</th><th>{t('date')}</th><th>{t('status')}</th><th>{t('printAttempts')}</th><th>{t('reprint')}</th></tr></thead>
+                  <tbody>{printJobs.map((job) => (
+                    <tr key={job.id}>
+                      <td>{job.invoiceNumber ?? t('testPrint')}</td>
+                      <td>{job.printerName ?? '—'}</td>
+                      <td>{new Date(job.createdAt).toLocaleString(isArabic ? 'ar' : 'en')}</td>
+                      <td><span className={`print-status print-status-${job.status}`}>{t(job.status)}</span>{job.lastError && <small className="print-error-detail">{job.lastError}</small>}</td>
+                      <td>{job.attemptCount}</td>
+                      <td>{job.saleId !== null && <button className="text-button" type="button" onClick={() => void retryPrintJob(job)} disabled={printerBusy}>{t('reprint')}</button>}</td>
+                    </tr>
+                  ))}
+                  {printJobs.length === 0 && <tr><td colSpan={6} className="inventory-empty">{t('noPrintJobs')}</td></tr>}</tbody>
+                </table></div>
+                {printNotice && !saleReceipt && <p className="printer-notice" role="status">{printNotice}</p>}
+              </section>
+            )}
           </section>
         ) : (
           <section className="page-content section-placeholder" aria-live="polite">

@@ -24,7 +24,7 @@ pub enum DatabaseError {
     Clock(#[from] std::time::SystemTimeError),
 }
 
-fn migrations() -> Migrations<'static> {
+pub(crate) fn migrations() -> Migrations<'static> {
     Migrations::new(vec![
         M::up(include_str!("../migrations/0001_core.sql")),
         M::up(include_str!("../migrations/0002_inventory.sql")),
@@ -32,6 +32,8 @@ fn migrations() -> Migrations<'static> {
         M::up(include_str!(
             "../migrations/0004_sales_and_pharmacy_settings.sql"
         )),
+        M::up(include_str!("../migrations/0005_pos_payments.sql")),
+        M::up(include_str!("../migrations/0006_thermal_printing.sql")),
     ])
 }
 
@@ -105,7 +107,7 @@ mod tests {
         let connection = migrated_memory_database();
         connection
             .execute(
-                "INSERT INTO currencies (code, name, symbol, minor_unit_exponent)
+                "INSERT OR IGNORE INTO currencies (code, name, symbol, minor_unit_exponent)
                  VALUES ('SAR', 'Saudi Riyal', 'ر.س', 2), ('USD', 'US Dollar', '$', 2)",
                 [],
             )
@@ -203,7 +205,7 @@ mod tests {
         let connection =
             Connection::open(directory.path().join(DATABASE_FILE)).expect("create database file");
         connection
-            .pragma_update(None, "user_version", 5)
+            .pragma_update(None, "user_version", 7)
             .expect("set future schema version");
         drop(connection);
 

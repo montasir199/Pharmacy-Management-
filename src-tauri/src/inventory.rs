@@ -60,6 +60,7 @@ pub struct ProductSummary {
     pub reorder_level_units: i64,
     pub sale_price_minor: i64,
     pub available_units: i64,
+    pub nearest_expiry_date: Option<String>,
 }
 
 #[derive(Debug)]
@@ -357,7 +358,17 @@ pub fn list_products(connection: &Connection) -> Result<Vec<ProductSummary>, Inv
                 products.name_ar, products.name_en, products.base_unit,
                 products.reorder_level_units,
                 products.sale_price_minor,
-                COALESCE(SUM(stock_movements.delta_units), 0) AS available_units
+                COALESCE(SUM(stock_movements.delta_units), 0) AS available_units,
+                (SELECT MIN(available_batches.expiry_date)
+                 FROM batches AS available_batches
+                 WHERE available_batches.product_id = products.id
+                   AND available_batches.expiry_date >= date('now', 'localtime')
+                   AND COALESCE(
+                       (SELECT SUM(available_movements.delta_units)
+                        FROM stock_movements AS available_movements
+                        WHERE available_movements.batch_id = available_batches.id),
+                       0
+                   ) > 0) AS nearest_expiry_date
          FROM products
          LEFT JOIN batches ON batches.product_id = products.id
                             AND batches.expiry_date >= date('now', 'localtime')
@@ -378,6 +389,7 @@ pub fn list_products(connection: &Connection) -> Result<Vec<ProductSummary>, Inv
                 reorder_level_units: row.get(6)?,
                 sale_price_minor: row.get(7)?,
                 available_units: row.get(8)?,
+                nearest_expiry_date: row.get(9)?,
             })
         })?
         .collect::<Result<Vec<_>, _>>()?;

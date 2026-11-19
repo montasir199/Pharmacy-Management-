@@ -3,6 +3,7 @@
 mod database;
 mod inventory;
 mod operations;
+mod printing;
 
 use std::collections::HashMap;
 use std::sync::Mutex;
@@ -174,6 +175,29 @@ fn list_sales(
 }
 
 #[tauri::command]
+fn list_currencies(
+    state: tauri::State<'_, DatabaseState>,
+) -> Result<Vec<operations::CurrencySummary>, String> {
+    let connection = state
+        .connection
+        .lock()
+        .map_err(|_| "database state is unavailable".to_owned())?;
+    operations::list_currencies(&connection).map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn get_sale(
+    state: tauri::State<'_, DatabaseState>,
+    sale_id: i64,
+) -> Result<operations::SaleDetail, String> {
+    let connection = state
+        .connection
+        .lock()
+        .map_err(|_| "database state is unavailable".to_owned())?;
+    operations::get_sale(&connection, sale_id)
+}
+
+#[tauri::command]
 fn create_purchase(
     state: tauri::State<'_, DatabaseState>,
     reference_number: String,
@@ -240,12 +264,153 @@ fn create_sale(
     customer_id: Option<i64>,
     items: Vec<operations::SaleCartItem>,
     status: String,
+    payments: Vec<operations::SalePaymentInput>,
+    currency_code: String,
+    exchange_rate_scaled: i64,
 ) -> Result<operations::CreatedSale, String> {
     let mut connection = state
         .connection
         .lock()
         .map_err(|_| "database state is unavailable".to_owned())?;
-    operations::create_sale(&mut connection, customer_id, &items, &status)
+    operations::create_sale(
+        &mut connection,
+        customer_id,
+        &items,
+        &status,
+        &payments,
+        &currency_code,
+        exchange_rate_scaled,
+    )
+}
+
+#[tauri::command]
+fn list_printers(
+    state: tauri::State<'_, DatabaseState>,
+) -> Result<Vec<printing::PrinterConfig>, String> {
+    let connection = state
+        .connection
+        .lock()
+        .map_err(|_| "database state is unavailable".to_owned())?;
+    printing::list_printers(&connection).map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn save_printer(
+    state: tauri::State<'_, DatabaseState>,
+    printer: printing::PrinterConfig,
+) -> Result<i64, String> {
+    let mut connection = state
+        .connection
+        .lock()
+        .map_err(|_| "database state is unavailable".to_owned())?;
+    printing::save_printer(&mut connection, printer)
+}
+
+#[tauri::command]
+fn remove_printer(state: tauri::State<'_, DatabaseState>, printer_id: i64) -> Result<(), String> {
+    let mut connection = state
+        .connection
+        .lock()
+        .map_err(|_| "database state is unavailable".to_owned())?;
+    printing::remove_printer(&mut connection, printer_id)
+}
+
+#[tauri::command]
+async fn discover_usb_printers() -> Result<Vec<printing::UsbPrinter>, String> {
+    tauri::async_runtime::spawn_blocking(printing::discover_usb_printers)
+        .await
+        .map_err(|error| format!("USB discovery worker failed: {error}"))?
+}
+
+#[tauri::command]
+async fn discover_network_printers() -> Result<Vec<printing::NetworkPrinter>, String> {
+    tauri::async_runtime::spawn_blocking(printing::discover_network_printers)
+        .await
+        .map_err(|error| format!("network discovery worker failed: {error}"))?
+}
+
+#[tauri::command]
+fn list_print_jobs(
+    state: tauri::State<'_, DatabaseState>,
+) -> Result<Vec<printing::PrintJobSummary>, String> {
+    let connection = state
+        .connection
+        .lock()
+        .map_err(|_| "database state is unavailable".to_owned())?;
+    printing::list_jobs(&connection).map_err(|error| error.to_string())
+}
+
+async fn complete_print_job(
+    app: tauri::AppHandle,
+    prepared: printing::PreparedPrint,
+) -> Result<printing::PrintJobSummary, String> {
+    let job_id = prepared.job_id;
+    let result = match tauri::async_runtime::spawn_blocking(move || {
+        printing::send_prepared(&prepared)
+    })
+    .await
+    {
+        Ok(result) => result,
+        Err(error) => Err(format!("printer worker failed: {error}")),
+    };
+    let state = app.state::<DatabaseState>();
+    let connection = state
+        .connection
+        .lock()
+        .map_err(|_| "database state is unavailable".to_owned())?;
+    printing::complete_job(&connection, job_id, result)
+}
+
+#[tauri::command]
+async fn print_sale_receipt(
+    app: tauri::AppHandle,
+    sale_id: i64,
+    printer_id: Option<i64>,
+    png_base64: String,
+) -> Result<printing::PrintJobSummary, String> {
+    let state = app.state::<DatabaseState>();
+    let prepared = {
+        let mut connection = state
+            .connection
+            .lock()
+            .map_err(|_| "database state is unavailable".to_owned())?;
+        printing::prepare_sale(&mut connection, sale_id, printer_id, &png_base64)?
+    };
+    complete_print_job(app, prepared).await
+}
+
+#[tauri::command]
+async fn print_test_page(
+    app: tauri::AppHandle,
+    printer_id: i64,
+    png_base64: String,
+) -> Result<printing::PrintJobSummary, String> {
+    let state = app.state::<DatabaseState>();
+    let prepared = {
+        let mut connection = state
+            .connection
+            .lock()
+            .map_err(|_| "database state is unavailable".to_owned())?;
+        printing::prepare_test(&mut connection, printer_id, &png_base64)?
+    };
+    complete_print_job(app, prepared).await
+}
+
+#[tauri::command]
+async fn retry_print_job(
+    app: tauri::AppHandle,
+    job_id: i64,
+    png_base64: String,
+) -> Result<printing::PrintJobSummary, String> {
+    let state = app.state::<DatabaseState>();
+    let prepared = {
+        let mut connection = state
+            .connection
+            .lock()
+            .map_err(|_| "database state is unavailable".to_owned())?;
+        printing::prepare_retry(&mut connection, job_id, &png_base64)?
+    };
+    complete_print_job(app, prepared).await
 }
 
 fn main() {
@@ -260,6 +425,14 @@ fn main() {
             app.manage(DatabaseState {
                 connection: Mutex::new(connection),
             });
+            {
+                let state = app.state::<DatabaseState>();
+                let connection = state
+                    .connection
+                    .lock()
+                    .map_err(|_| "database state is unavailable")?;
+                printing::recover_interrupted_jobs(&connection)?;
+            }
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -274,11 +447,22 @@ fn main() {
             create_customer,
             list_purchases,
             list_sales,
+            list_currencies,
+            get_sale,
             create_purchase,
             get_setting,
             set_setting,
             set_settings,
-            create_sale
+            create_sale,
+            list_printers,
+            save_printer,
+            remove_printer,
+            discover_usb_printers,
+            discover_network_printers,
+            list_print_jobs,
+            print_sale_receipt,
+            print_test_page,
+            retry_print_job
         ])
         .run(tauri::generate_context!())
         .expect("failed to run Pharmacy Management");

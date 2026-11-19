@@ -5,10 +5,15 @@ import App from './App'
 import i18n from './i18n'
 
 const invokeMock = vi.hoisted(() => vi.fn())
+const isTauriMock = vi.hoisted(() => vi.fn(() => false))
 vi.mock('@tauri-apps/api/core', () => ({
   invoke: invokeMock,
-  isTauri: () => false,
+  isTauri: isTauriMock,
 }))
+vi.mock('html-to-image', () => ({
+  toPng: vi.fn().mockResolvedValue('data:image/png;base64,aGVsbG8='),
+}))
+vi.mock('react-barcode', () => ({ default: () => null }))
 vi.mock('@tauri-apps/plugin-updater', () => ({
   check: vi.fn().mockResolvedValue(null),
 }))
@@ -18,6 +23,7 @@ describe('main application shell', () => {
     localStorage.clear()
     await i18n.changeLanguage('ar')
     invokeMock.mockReset()
+    isTauriMock.mockReturnValue(false)
     invokeMock.mockImplementation((command: string) => {
       if (command === 'get_dashboard') return Promise.resolve({
         todaySalesMinor: 12500,
@@ -37,10 +43,40 @@ describe('main application shell', () => {
         reorderLevelUnits: 5,
         salePriceMinor: 1250,
         availableUnits: 24,
+        nearestExpiryDate: '2027-01-01',
+      }])
+      if (command === 'list_currencies') return Promise.resolve([{
+        code: 'SAR',
+        name: 'Saudi riyal',
+        symbol: 'ر.س',
+        minorUnitExponent: 2,
       }])
       if (command === 'create_sale') return Promise.resolve({
+        id: 1,
         invoiceNumber: 'INV-20261119-000001',
         totalMinor: 1250,
+      })
+      if (command === 'get_sale') return Promise.resolve({
+        id: 1,
+        invoiceNumber: 'INV-20261119-000001',
+        subtotalMinor: 1250,
+        discountMinor: 0,
+        taxMinor: 0,
+        totalMinor: 1250,
+        customerName: null,
+        soldAt: new Date().toISOString(),
+        currencyCode: 'SAR',
+        exchangeRateScaled: 1000000000,
+        taxRateBasisPoints: 0,
+        items: [{
+          productNameAr: 'باراسيتامول',
+          productNameEn: 'Paracetamol',
+          quantity: 1,
+          unitPriceMinor: 1250,
+          discountMinor: 0,
+          lineTotalMinor: 1250,
+        }],
+        payments: [{ method: 'cash', amountMinor: 1250, currencyCode: 'SAR' }],
       })
       if (command === 'get_setting') return Promise.resolve('')
       return Promise.resolve([])
@@ -128,23 +164,159 @@ describe('main application shell', () => {
     })
   })
 
+  it('saves an independent Ethernet printer profile', async () => {
+    const user = userEvent.setup()
+    const originalInvoke = invokeMock.getMockImplementation()
+    invokeMock.mockImplementation((command: string, args: Record<string, unknown>) => {
+      if (command === 'list_printers') return Promise.resolve([])
+      if (command === 'save_printer') return Promise.resolve(3)
+      return originalInvoke?.(command, args)
+    })
+    render(<App />)
+    await user.click(screen.getByRole('button', { name: 'الإعدادات' }))
+
+    await user.type(await screen.findByLabelText('اسم الطابعة'), 'Thermal LAN')
+    await user.selectOptions(screen.getByLabelText('نوع الاتصال'), 'network')
+    await user.type(screen.getByLabelText('عنوان IP للطابعة'), '192.168.1.40')
+    expect(screen.getByLabelText('اسم الطابعة')).toHaveValue('Thermal LAN')
+    expect(screen.getByLabelText('نوع الاتصال')).toHaveValue('network')
+    expect(screen.getByLabelText('عنوان IP للطابعة')).toHaveValue('192.168.1.40')
+    expect(screen.getByLabelText('منفذ الشبكة')).toHaveValue(9100)
+    await user.click(screen.getByRole('button', { name: 'حفظ الطابعة' }))
+
+    await waitFor(() => {
+      expect(invokeMock).toHaveBeenCalledWith('save_printer', {
+        printer: expect.objectContaining({
+          name: 'Thermal LAN',
+          connectionType: 'network',
+          host: '192.168.1.40',
+          port: 9100,
+          paperWidth: '80mm',
+          dpi: 203,
+          autoCut: true,
+        }),
+      })
+    })
+  })
+
   it('creates a point-of-sale invoice with a generated number and enables printing', async () => {
     const user = userEvent.setup()
     render(<App />)
     await user.click(screen.getByRole('button', { name: 'المبيعات' }))
 
-    await user.click(await screen.findByRole('button', { name: /باراسيتامول/ }))
-    await user.click(screen.getByRole('button', { name: 'حفظ فاتورة البيع' }))
+    await user.click(await screen.findByRole('button', { name: /إضافة للفاتورة باراسيتامول/ }))
+    await user.click(screen.getByRole('button', { name: /إتمام البيع/ }))
 
     await waitFor(() => {
       expect(invokeMock).toHaveBeenCalledWith('create_sale', {
         customerId: null,
-        items: [{ productId: 1, quantity: 1 }],
+        items: [{ productId: 1, quantity: 1, discountBasisPoints: 0 }],
         status: 'paid',
+        payments: [{ method: 'cash', amountMinor: 1250, currencyCode: 'SAR' }],
+        currencyCode: 'SAR',
+        exchangeRateScaled: 1000000000,
       })
     })
     expect(await screen.findByText('INV-20261119-000001')).toBeInTheDocument()
     expect(screen.getByRole('button', { name: /طباعة الفاتورة/ })).toBeInTheDocument()
+    expect(screen.getByText('شكرًا لزيارتكم')).toBeInTheDocument()
+    expect(screen.getByText('المبلغ المدفوع')).toBeInTheDocument()
+    expect(document.querySelector('.receipt-code-row svg')).toBeInTheDocument()
+  })
+
+  it('records a printer failure without undoing the saved sale', async () => {
+    const user = userEvent.setup()
+    const defaultPrinter = {
+      id: 8,
+      name: 'Receipt printer',
+      connectionType: 'network',
+      vendorId: null,
+      productId: null,
+      host: '192.168.1.40',
+      port: 9100,
+      paperWidth: '80mm',
+      dpi: 203,
+      copies: 1,
+      autoCut: true,
+      autoPrint: false,
+      printLogo: true,
+      fontSize: 12,
+      isDefault: true,
+    }
+    const originalInvoke = invokeMock.getMockImplementation()
+    isTauriMock.mockReturnValue(true)
+    invokeMock.mockImplementation((command: string, args: Record<string, unknown>) => {
+      if (command === 'list_printers') return Promise.resolve([defaultPrinter])
+      if (command === 'print_sale_receipt') return Promise.resolve({
+        id: 4,
+        saleId: args.saleId,
+        printerId: args.printerId,
+        jobType: 'sale',
+        status: 'failed',
+        attemptCount: 1,
+        lastError: 'network printer unavailable',
+        createdAt: new Date().toISOString(),
+      })
+      return originalInvoke?.(command, args)
+    })
+    render(<App />)
+    await user.click(screen.getByRole('button', { name: 'المبيعات' }))
+    await user.click(await screen.findByRole('button', { name: /إضافة للفاتورة باراسيتامول/ }))
+    await user.click(screen.getByRole('button', { name: /إتمام البيع/ }))
+    await screen.findByText('INV-20261119-000001')
+    await user.click(screen.getByRole('button', { name: /طباعة الفاتورة/ }))
+
+    await waitFor(() => {
+      expect(invokeMock).toHaveBeenCalledWith('print_sale_receipt', expect.objectContaining({
+        saleId: 1,
+        printerId: 8,
+        pngBase64: 'aGVsbG8=',
+      }))
+    })
+    expect(screen.getByText('INV-20261119-000001')).toBeInTheDocument()
+    expect(screen.getByText('network printer unavailable')).toBeInTheDocument()
+  })
+
+  it('adds a product when a barcode scanner submits an exact barcode', async () => {
+    const user = userEvent.setup()
+    render(<App />)
+    await user.click(screen.getByRole('button', { name: 'المبيعات' }))
+
+    const barcode = await screen.findByRole('textbox', { name: 'امسح الباركود أو اكتبه' })
+    await user.type(barcode, '628100{Enter}')
+
+    expect(await screen.findByLabelText('الكمية بوحدة المنتج باراسيتامول')).toHaveValue(1)
+  })
+
+  it('updates line discounts and requires a complete split payment before checkout', async () => {
+    const user = userEvent.setup()
+    render(<App />)
+    await user.click(screen.getByRole('button', { name: 'المبيعات' }))
+    await user.click(await screen.findByRole('button', { name: /إضافة للفاتورة باراسيتامول/ }))
+
+    await user.clear(screen.getByLabelText('الكمية بوحدة المنتج باراسيتامول'))
+    await user.type(screen.getByLabelText('الكمية بوحدة المنتج باراسيتامول'), '2')
+    await user.clear(screen.getByLabelText('خصم % باراسيتامول'))
+    await user.type(screen.getByLabelText('خصم % باراسيتامول'), '10')
+    await user.click(screen.getByRole('button', { name: 'دفع مختلط' }))
+
+    const completeSale = screen.getByRole('button', { name: /إتمام البيع/ })
+    expect(completeSale).toBeDisabled()
+
+    await user.type(screen.getByLabelText('نقدًا'), '10')
+    await user.type(screen.getByLabelText('بطاقة'), '12.5')
+    expect(completeSale).toBeEnabled()
+    await user.click(completeSale)
+
+    await waitFor(() => {
+      expect(invokeMock).toHaveBeenCalledWith('create_sale', expect.objectContaining({
+        items: [{ productId: 1, quantity: 2, discountBasisPoints: 1000 }],
+        payments: [
+          { method: 'cash', amountMinor: 1000, currencyCode: 'SAR' },
+          { method: 'card', amountMinor: 1250, currencyCode: 'SAR' },
+        ],
+      }))
+    })
   })
 
   it('opens every application page without a placeholder screen', async () => {

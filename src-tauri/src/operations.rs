@@ -1,4 +1,4 @@
-use rusqlite::{params, Connection, Transaction, TransactionBehavior};
+use rusqlite::{params, Connection, OptionalExtension, Transaction, TransactionBehavior};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize)]
@@ -18,6 +18,64 @@ pub struct SaleSummary {
     pub sold_at: String,
     pub total_minor: i64,
     pub status: String,
+    pub currency_code: String,
+    pub exchange_rate_scaled: i64,
+    pub payment_method: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CurrencySummary {
+    pub code: String,
+    pub name: String,
+    pub symbol: String,
+    pub minor_unit_exponent: i64,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SalePaymentInput {
+    pub method: String,
+    pub amount_minor: i64,
+    pub currency_code: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SalePaymentSummary {
+    pub method: String,
+    pub amount_minor: i64,
+    pub currency_code: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SaleItemDetail {
+    pub product_name_ar: String,
+    pub product_name_en: String,
+    pub quantity: i64,
+    pub unit_price_minor: i64,
+    pub discount_minor: i64,
+    pub line_total_minor: i64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SaleDetail {
+    pub id: i64,
+    pub invoice_number: String,
+    pub customer_name: Option<String>,
+    pub sold_at: String,
+    pub subtotal_minor: i64,
+    pub discount_minor: i64,
+    pub tax_minor: i64,
+    pub total_minor: i64,
+    pub status: String,
+    pub currency_code: String,
+    pub exchange_rate_scaled: i64,
+    pub tax_rate_basis_points: i64,
+    pub items: Vec<SaleItemDetail>,
+    pub payments: Vec<SalePaymentSummary>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -84,9 +142,13 @@ pub fn dashboard(connection: &Connection) -> Result<DashboardSummary, rusqlite::
     let mut statement = connection.prepare(
         "SELECT sales.id, sales.invoice_number,
                 customers.name, sales.sold_at,
-                sales.total_minor, sales.status
+                sales.total_minor, sales.status, sales.currency_code, sales.exchange_rate_scaled,
+                CASE WHEN COUNT(DISTINCT sale_payments.method) > 1 THEN 'mixed'
+                     ELSE MIN(sale_payments.method) END
          FROM sales
          LEFT JOIN customers ON customers.id = sales.customer_id
+         LEFT JOIN sale_payments ON sale_payments.sale_id = sales.id
+         GROUP BY sales.id
          ORDER BY sales.sold_at DESC
          LIMIT 8",
     )?;
@@ -99,6 +161,9 @@ pub fn dashboard(connection: &Connection) -> Result<DashboardSummary, rusqlite::
                 sold_at: row.get(3)?,
                 total_minor: row.get(4)?,
                 status: row.get(5)?,
+                currency_code: row.get(6)?,
+                exchange_rate_scaled: row.get(7)?,
+                payment_method: row.get(8)?,
             })
         })?
         .collect::<Result<Vec<_>, _>>()?;
@@ -134,9 +199,13 @@ pub fn list_sales(connection: &Connection) -> Result<Vec<SaleSummary>, rusqlite:
     let mut statement = connection.prepare(
         "SELECT sales.id, sales.invoice_number,
                 customers.name, sales.sold_at,
-                sales.total_minor, sales.status
+                sales.total_minor, sales.status, sales.currency_code, sales.exchange_rate_scaled,
+                CASE WHEN COUNT(DISTINCT sale_payments.method) > 1 THEN 'mixed'
+                     ELSE MIN(sale_payments.method) END
          FROM sales
          LEFT JOIN customers ON customers.id = sales.customer_id
+         LEFT JOIN sale_payments ON sale_payments.sale_id = sales.id
+         GROUP BY sales.id
          ORDER BY sales.sold_at DESC",
     )?;
     let sales = statement
@@ -148,6 +217,9 @@ pub fn list_sales(connection: &Connection) -> Result<Vec<SaleSummary>, rusqlite:
                 sold_at: row.get(3)?,
                 total_minor: row.get(4)?,
                 status: row.get(5)?,
+                currency_code: row.get(6)?,
+                exchange_rate_scaled: row.get(7)?,
+                payment_method: row.get(8)?,
             })
         })?
         .collect::<Result<Vec<_>, _>>()?;
@@ -194,11 +266,14 @@ pub fn create_customer(
 pub struct SaleCartItem {
     pub product_id: i64,
     pub quantity: i64,
+    #[serde(default)]
+    pub discount_basis_points: i64,
 }
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CreatedSale {
+    pub id: i64,
     pub invoice_number: String,
     pub total_minor: i64,
 }
@@ -208,18 +283,64 @@ pub fn create_sale(
     customer_id: Option<i64>,
     items: &[SaleCartItem],
     status: &str,
+    payments: &[SalePaymentInput],
+    currency_code: &str,
+    exchange_rate_scaled: i64,
 ) -> Result<CreatedSale, String> {
     if items.is_empty()
-        || items
-            .iter()
-            .any(|item| item.product_id <= 0 || item.quantity <= 0)
-        || !matches!(status, "paid" | "pending" | "cancelled")
+        || items.iter().any(|item| {
+            item.product_id <= 0
+                || item.quantity <= 0
+                || !(0..=10000).contains(&item.discount_basis_points)
+        })
+        || status != "paid"
+        || payments.is_empty()
+        || payments.iter().any(|payment| {
+            !matches!(payment.method.as_str(), "cash" | "card" | "bank_transfer")
+                || payment.amount_minor <= 0
+                || payment.currency_code != currency_code
+        })
+        || exchange_rate_scaled <= 0
     {
         return Err("Invalid sale details".to_owned());
     }
     let transaction: Transaction<'_> = connection
         .transaction_with_behavior(TransactionBehavior::Immediate)
         .map_err(|error| error.to_string())?;
+    let (currency_enabled, base_exponent, invoice_exponent): (bool, i64, i64) = transaction
+        .query_row(
+            "SELECT invoice_currency.is_enabled,
+                    base_currency.minor_unit_exponent,
+                    invoice_currency.minor_unit_exponent
+             FROM currencies AS invoice_currency
+             JOIN currencies AS base_currency ON base_currency.code = 'SAR'
+             WHERE invoice_currency.code = ?1",
+            [currency_code],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .map_err(|error| error.to_string())?;
+    if !currency_enabled {
+        return Err("Selected currency is disabled".to_owned());
+    }
+    let configured_tax_rate: Option<String> = transaction
+        .query_row(
+            "SELECT value FROM app_settings WHERE key = 'tax_rate_basis_points'",
+            [],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(|error| error.to_string())?;
+    let tax_rate_basis_points = configured_tax_rate
+        .map(|value| {
+            value
+                .parse::<i64>()
+                .map_err(|_| "Invalid configured tax rate".to_owned())
+        })
+        .transpose()?
+        .unwrap_or(0);
+    if !(0..=10000).contains(&tax_rate_basis_points) {
+        return Err("Invalid configured tax rate".to_owned());
+    }
     let items = items
         .iter()
         .map(|item| {
@@ -234,7 +355,22 @@ pub fn create_sale(
             if unit_price_minor <= 0 {
                 return Err("Product must have a sale price greater than zero".to_owned());
             }
-            Ok((item.product_id, item.quantity, unit_price_minor))
+            let line_subtotal = item
+                .quantity
+                .checked_mul(unit_price_minor)
+                .ok_or_else(|| "Sale line total overflow".to_owned())?;
+            let line_discount = rounded_ratio(line_subtotal, item.discount_basis_points, 10000)?;
+            let line_total = line_subtotal
+                .checked_sub(line_discount)
+                .ok_or_else(|| "Sale discount exceeds line total".to_owned())?;
+            Ok((
+                item.product_id,
+                item.quantity,
+                unit_price_minor,
+                line_discount,
+                line_subtotal,
+                line_total,
+            ))
         })
         .collect::<Result<Vec<_>, String>>()?;
     let business_date: String = transaction
@@ -247,7 +383,7 @@ pub fn create_sale(
         .map_err(|error| error.to_string())?;
     let invoice_number = format!("INV-{}-{next_sale_id:06}", business_date.replace('-', ""));
     if status == "paid" {
-        for (product_id, quantity, _) in &items {
+        for (product_id, quantity, _, _, _, _) in &items {
             crate::inventory::dispense_fefo_in_transaction(
                 &transaction,
                 *product_id,
@@ -258,37 +394,210 @@ pub fn create_sale(
             .map_err(|error| error.to_string())?;
         }
     }
-    let total = items
+    let subtotal = items
         .iter()
-        .try_fold(0_i64, |sum, (_, quantity, unit_price)| {
-            quantity
-                .checked_mul(*unit_price)
-                .and_then(|line| sum.checked_add(line))
+        .try_fold(0_i64, |sum, (_, _, _, _, line_subtotal, _)| {
+            sum.checked_add(*line_subtotal)
         })
         .ok_or_else(|| "Sale total overflow".to_owned())?;
+    let discount = items
+        .iter()
+        .try_fold(0_i64, |sum, (_, _, _, line_discount, _, _)| {
+            sum.checked_add(*line_discount)
+        })
+        .ok_or_else(|| "Sale discount overflow".to_owned())?;
+    let taxable_subtotal = subtotal
+        .checked_sub(discount)
+        .ok_or_else(|| "Sale discount exceeds subtotal".to_owned())?;
+    let tax = rounded_ratio(taxable_subtotal, tax_rate_basis_points, 10000)?;
+    let total = taxable_subtotal
+        .checked_add(tax)
+        .ok_or_else(|| "Sale total overflow".to_owned())?;
+    let invoice_total =
+        convert_minor_units(total, base_exponent, invoice_exponent, exchange_rate_scaled)?;
+    let paid = payments
+        .iter()
+        .try_fold(0_i64, |sum, payment| sum.checked_add(payment.amount_minor))
+        .ok_or_else(|| "Payment total overflow".to_owned())?;
+    if paid < invoice_total {
+        return Err("Payment is less than the invoice total".to_owned());
+    }
     transaction
         .execute(
-            "INSERT INTO sales (invoice_number, customer_id, subtotal_minor, total_minor, status)
-         VALUES (?1, ?2, ?3, ?3, ?4)",
-            params![invoice_number, customer_id, total, status],
+            "INSERT INTO sales
+             (invoice_number, customer_id, subtotal_minor, discount_minor, tax_minor, total_minor,
+              status, currency_code, exchange_rate_scaled, tax_rate_basis_points)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+            params![
+                invoice_number,
+                customer_id,
+                subtotal,
+                discount,
+                tax,
+                total,
+                status,
+                currency_code,
+                exchange_rate_scaled,
+                tax_rate_basis_points
+            ],
         )
         .map_err(|error| error.to_string())?;
     let sale_id = transaction.last_insert_rowid();
-    for (product_id, quantity, unit_price) in items {
-        let line_total = quantity
-            .checked_mul(unit_price)
-            .ok_or_else(|| "Sale line total overflow".to_owned())?;
-        transaction.execute(
-            "INSERT INTO sale_items (sale_id, product_id, quantity, unit_price_minor, line_total_minor)
-             VALUES (?1, ?2, ?3, ?4, ?5)",
-            params![sale_id, product_id, quantity, unit_price, line_total],
-        ).map_err(|error| error.to_string())?;
+    for (product_id, quantity, unit_price, line_discount, _, line_total) in items {
+        transaction
+            .execute(
+                "INSERT INTO sale_items
+             (sale_id, product_id, quantity, unit_price_minor, line_total_minor, discount_minor)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                params![
+                    sale_id,
+                    product_id,
+                    quantity,
+                    unit_price,
+                    line_total,
+                    line_discount
+                ],
+            )
+            .map_err(|error| error.to_string())?;
+    }
+    for payment in payments {
+        transaction
+            .execute(
+                "INSERT INTO sale_payments (sale_id, method, amount_minor, currency_code)
+             VALUES (?1, ?2, ?3, ?4)",
+                params![
+                    sale_id,
+                    payment.method,
+                    payment.amount_minor,
+                    payment.currency_code
+                ],
+            )
+            .map_err(|error| error.to_string())?;
     }
     transaction.commit().map_err(|error| error.to_string())?;
     Ok(CreatedSale {
+        id: sale_id,
         invoice_number,
         total_minor: total,
     })
+}
+
+fn rounded_ratio(value: i64, numerator: i64, denominator: i64) -> Result<i64, String> {
+    let result = (i128::from(value) * i128::from(numerator) + i128::from(denominator / 2))
+        / i128::from(denominator);
+    i64::try_from(result).map_err(|_| "Sale amount overflow".to_owned())
+}
+
+fn convert_minor_units(
+    amount_minor: i64,
+    base_exponent: i64,
+    quote_exponent: i64,
+    rate_scaled: i64,
+) -> Result<i64, String> {
+    let scale = 1_000_000_000_i128;
+    let numerator = i128::from(amount_minor)
+        .checked_mul(10_i128.pow(quote_exponent as u32))
+        .and_then(|value| value.checked_mul(scale))
+        .ok_or_else(|| "Currency conversion overflow".to_owned())?;
+    let denominator = 10_i128
+        .pow(base_exponent as u32)
+        .checked_mul(i128::from(rate_scaled))
+        .ok_or_else(|| "Currency conversion overflow".to_owned())?;
+    let converted = (numerator + denominator / 2) / denominator;
+    i64::try_from(converted).map_err(|_| "Currency conversion overflow".to_owned())
+}
+
+pub fn list_currencies(connection: &Connection) -> Result<Vec<CurrencySummary>, rusqlite::Error> {
+    let mut statement = connection.prepare(
+        "SELECT code, name, symbol, minor_unit_exponent
+         FROM currencies WHERE is_enabled = 1 ORDER BY code",
+    )?;
+    let currencies = statement
+        .query_map([], |row| {
+            Ok(CurrencySummary {
+                code: row.get(0)?,
+                name: row.get(1)?,
+                symbol: row.get(2)?,
+                minor_unit_exponent: row.get(3)?,
+            })
+        })?
+        .collect();
+    currencies
+}
+
+pub fn get_sale(connection: &Connection, sale_id: i64) -> Result<SaleDetail, String> {
+    let mut detail = connection
+        .query_row(
+            "SELECT sales.id, sales.invoice_number, customers.name, sales.sold_at,
+                    sales.subtotal_minor, sales.discount_minor, sales.tax_minor, sales.total_minor,
+                    sales.status, sales.currency_code, sales.exchange_rate_scaled,
+                    sales.tax_rate_basis_points
+             FROM sales LEFT JOIN customers ON customers.id = sales.customer_id
+             WHERE sales.id = ?1",
+            [sale_id],
+            |row| {
+                Ok(SaleDetail {
+                    id: row.get(0)?,
+                    invoice_number: row.get(1)?,
+                    customer_name: row.get(2)?,
+                    sold_at: row.get(3)?,
+                    subtotal_minor: row.get(4)?,
+                    discount_minor: row.get(5)?,
+                    tax_minor: row.get(6)?,
+                    total_minor: row.get(7)?,
+                    status: row.get(8)?,
+                    currency_code: row.get(9)?,
+                    exchange_rate_scaled: row.get(10)?,
+                    tax_rate_basis_points: row.get(11)?,
+                    items: Vec::new(),
+                    payments: Vec::new(),
+                })
+            },
+        )
+        .map_err(|error| error.to_string())?;
+
+    let mut items = connection
+        .prepare(
+            "SELECT products.name_ar, products.name_en,
+                    sale_items.quantity, sale_items.unit_price_minor,
+                    sale_items.discount_minor, sale_items.line_total_minor
+             FROM sale_items JOIN products ON products.id = sale_items.product_id
+             WHERE sale_items.sale_id = ?1 ORDER BY sale_items.id",
+        )
+        .map_err(|error| error.to_string())?;
+    detail.items = items
+        .query_map([sale_id], |row| {
+            Ok(SaleItemDetail {
+                product_name_ar: row.get(0)?,
+                product_name_en: row.get(1)?,
+                quantity: row.get(2)?,
+                unit_price_minor: row.get(3)?,
+                discount_minor: row.get(4)?,
+                line_total_minor: row.get(5)?,
+            })
+        })
+        .map_err(|error| error.to_string())?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| error.to_string())?;
+
+    let mut payments = connection
+        .prepare(
+            "SELECT method, amount_minor, currency_code
+             FROM sale_payments WHERE sale_id = ?1 ORDER BY id",
+        )
+        .map_err(|error| error.to_string())?;
+    detail.payments = payments
+        .query_map([sale_id], |row| {
+            Ok(SalePaymentSummary {
+                method: row.get(0)?,
+                amount_minor: row.get(1)?,
+                currency_code: row.get(2)?,
+            })
+        })
+        .map_err(|error| error.to_string())?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| error.to_string())?;
+    Ok(detail)
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -538,8 +847,16 @@ mod tests {
             &[SaleCartItem {
                 product_id,
                 quantity: 4,
+                discount_basis_points: 0,
             }],
             "paid",
+            &[SalePaymentInput {
+                method: "cash".to_owned(),
+                amount_minor: 1000,
+                currency_code: "SAR".to_owned(),
+            }],
+            "SAR",
+            1_000_000_000,
         )
         .is_err());
         assert!(list_sales(&connection).expect("list sales").is_empty());
@@ -554,8 +871,16 @@ mod tests {
             &[SaleCartItem {
                 product_id,
                 quantity: 2,
+                discount_basis_points: 0,
             }],
             "paid",
+            &[SalePaymentInput {
+                method: "cash".to_owned(),
+                amount_minor: 1000,
+                currency_code: "SAR".to_owned(),
+            }],
+            "SAR",
+            1_000_000_000,
         )
         .expect("record sale");
         assert!(created_sale.invoice_number.starts_with("INV-"));
@@ -572,5 +897,105 @@ mod tests {
         assert_eq!(dashboard.today_sales_minor, 500);
         assert_eq!(dashboard.today_orders, 1);
         assert_eq!(dashboard.stock_units, 1);
+    }
+
+    #[test]
+    fn discounted_taxed_mixed_currency_sale_persists_payments_and_fefo_together() {
+        let (_directory, mut connection, product_id) = setup();
+        inventory::receive_batch(
+            &mut connection,
+            product_id,
+            "LOT-MIXED",
+            "2999-12-31",
+            2,
+            "initial-stock",
+        )
+        .expect("receive stock");
+        set_setting(&connection, "tax_rate_basis_points", "1500").expect("configure VAT rate");
+
+        let created_sale = create_sale(
+            &mut connection,
+            None,
+            &[SaleCartItem {
+                product_id,
+                quantity: 2,
+                discount_basis_points: 1000,
+            }],
+            "paid",
+            &[
+                SalePaymentInput {
+                    method: "cash".to_owned(),
+                    amount_minor: 1295,
+                    currency_code: "BHD".to_owned(),
+                },
+                SalePaymentInput {
+                    method: "card".to_owned(),
+                    amount_minor: 1295,
+                    currency_code: "BHD".to_owned(),
+                },
+            ],
+            "BHD",
+            2_000_000_000,
+        )
+        .expect("record mixed currency sale");
+
+        assert_eq!(created_sale.total_minor, 518);
+        assert_eq!(
+            inventory::list_products(&connection).expect("list products")[0].available_units,
+            0
+        );
+        let detail = get_sale(&connection, created_sale.id).expect("load invoice detail");
+        assert_eq!(detail.currency_code, "BHD");
+        assert_eq!(detail.exchange_rate_scaled, 2_000_000_000);
+        assert_eq!(detail.tax_rate_basis_points, 1500);
+        assert_eq!(detail.subtotal_minor, 500);
+        assert_eq!(detail.discount_minor, 50);
+        assert_eq!(detail.tax_minor, 68);
+        assert_eq!(detail.items[0].discount_minor, 50);
+        assert_eq!(detail.payments.len(), 2);
+        assert_eq!(
+            list_sales(&connection).expect("list sales")[0]
+                .payment_method
+                .as_deref(),
+            Some("mixed")
+        );
+    }
+
+    #[test]
+    fn underpayment_rolls_back_sale_and_inventory_changes() {
+        let (_directory, mut connection, product_id) = setup();
+        inventory::receive_batch(
+            &mut connection,
+            product_id,
+            "LOT-UNDERPAID",
+            "2999-12-31",
+            2,
+            "initial-stock",
+        )
+        .expect("receive stock");
+
+        assert!(create_sale(
+            &mut connection,
+            None,
+            &[SaleCartItem {
+                product_id,
+                quantity: 2,
+                discount_basis_points: 0,
+            }],
+            "paid",
+            &[SalePaymentInput {
+                method: "cash".to_owned(),
+                amount_minor: 499,
+                currency_code: "SAR".to_owned(),
+            }],
+            "SAR",
+            1_000_000_000,
+        )
+        .is_err());
+        assert!(list_sales(&connection).expect("list sales").is_empty());
+        assert_eq!(
+            inventory::list_products(&connection).expect("list products")[0].available_units,
+            2
+        );
     }
 }

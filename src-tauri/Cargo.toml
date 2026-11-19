@@ -20,6 +20,12 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["fmt"] }
 tauri-plugin-updater = "2.12.0"
 tauri-plugin-process = "2.3.1"
+base64 = "0.22"
+escpos = { version = "0.18", default-features = false, features = ["usb"] }
+flume = "0.11"
+image = { version = "0.25", default-features = false, features = ["png"] }
+mdns-sd = "0.13"
+rusb = { version = "0.9", features = ["vendored"] }
 
 [dev-dependencies]
 tempfile = "3"
