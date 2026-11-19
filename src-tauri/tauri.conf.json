@@ -1,0 +1,33 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Dawai Pharmacy",
+  "version": "0.1.0",
+  "identifier": "com.dawai.pharmacy",
+  "build": {
+    "beforeDevCommand": "npm run dev",
+    "devUrl": "http://127.0.0.1:1420",
+    "beforeBuildCommand": "npm run build",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "دوائي | إدارة الصيدلية",
+        "width": 1440,
+        "height": 960,
+        "minWidth": 360,
+        "minHeight": 640,
+        "resizable": true
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; img-src 'self' asset: data:; style-src 'self' 'unsafe-inline'; font-src 'self' data:; connect-src ipc: http://ipc.localhost"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "category": "Business",
+    "shortDescription": "Offline pharmacy management",
+    "longDescription": "Arabic and English offline desktop pharmacy management system."
+  }
+}

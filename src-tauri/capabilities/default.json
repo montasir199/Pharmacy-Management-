@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "Default permissions for the pharmacy management window",
+  "windows": ["main"],
+  "permissions": ["core:default"]
+}
