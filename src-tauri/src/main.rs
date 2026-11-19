@@ -103,7 +103,9 @@ fn list_products(
 fn get_dashboard(
     state: tauri::State<'_, DatabaseState>,
 ) -> Result<operations::DashboardSummary, String> {
-    let connection = state.connection.lock()
+    let connection = state
+        .connection
+        .lock()
         .map_err(|_| "database state is unavailable".to_owned())?;
     operations::dashboard(&connection).map_err(|error| error.to_string())
 }
@@ -112,7 +114,9 @@ fn get_dashboard(
 fn list_customers(
     state: tauri::State<'_, DatabaseState>,
 ) -> Result<Vec<operations::CustomerSummary>, String> {
-    let connection = state.connection.lock()
+    let connection = state
+        .connection
+        .lock()
         .map_err(|_| "database state is unavailable".to_owned())?;
     operations::list_customers(&connection).map_err(|error| error.to_string())
 }
@@ -123,7 +127,9 @@ fn create_customer(
     name: String,
     phone: Option<String>,
 ) -> Result<i64, String> {
-    let connection = state.connection.lock()
+    let connection = state
+        .connection
+        .lock()
         .map_err(|_| "database state is unavailable".to_owned())?;
     operations::create_customer(&connection, &name, phone.as_deref())
 }
@@ -132,9 +138,22 @@ fn create_customer(
 fn list_purchases(
     state: tauri::State<'_, DatabaseState>,
 ) -> Result<Vec<operations::PurchaseSummary>, String> {
-    let connection = state.connection.lock()
+    let connection = state
+        .connection
+        .lock()
         .map_err(|_| "database state is unavailable".to_owned())?;
     operations::list_purchases(&connection).map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn list_sales(
+    state: tauri::State<'_, DatabaseState>,
+) -> Result<Vec<operations::SaleSummary>, String> {
+    let connection = state
+        .connection
+        .lock()
+        .map_err(|_| "database state is unavailable".to_owned())?;
+    operations::list_sales(&connection).map_err(|error| error.to_string())
 }
 
 #[tauri::command]
@@ -142,19 +161,33 @@ fn create_purchase(
     state: tauri::State<'_, DatabaseState>,
     reference_number: String,
     supplier_name: String,
-    total_minor: i64,
+    product_id: i64,
+    batch_number: String,
+    expiry_date: String,
+    quantity: i64,
+    unit_cost_minor: i64,
 ) -> Result<i64, String> {
-    let mut connection = state.connection.lock()
+    let mut connection = state
+        .connection
+        .lock()
         .map_err(|_| "database state is unavailable".to_owned())?;
-    operations::create_purchase(&mut connection, &reference_number, &supplier_name, total_minor)
+    operations::create_purchase(
+        &mut connection,
+        &reference_number,
+        &supplier_name,
+        product_id,
+        &batch_number,
+        &expiry_date,
+        quantity,
+        unit_cost_minor,
+    )
 }
 
 #[tauri::command]
-fn get_setting(
-    state: tauri::State<'_, DatabaseState>,
-    key: String,
-) -> Result<String, String> {
-    let connection = state.connection.lock()
+fn get_setting(state: tauri::State<'_, DatabaseState>, key: String) -> Result<String, String> {
+    let connection = state
+        .connection
+        .lock()
         .map_err(|_| "database state is unavailable".to_owned())?;
     operations::get_setting(&connection, &key).map_err(|error| error.to_string())
 }
@@ -165,7 +198,9 @@ fn set_setting(
     key: String,
     value: String,
 ) -> Result<(), String> {
-    let connection = state.connection.lock()
+    let connection = state
+        .connection
+        .lock()
         .map_err(|_| "database state is unavailable".to_owned())?;
     operations::set_setting(&connection, &key, &value).map_err(|error| error.to_string())
 }
@@ -180,7 +215,9 @@ fn create_sale(
     unit_price_minor: i64,
     status: String,
 ) -> Result<i64, String> {
-    let mut connection = state.connection.lock()
+    let mut connection = state
+        .connection
+        .lock()
         .map_err(|_| "database state is unavailable".to_owned())?;
     operations::create_sale(
         &mut connection,
@@ -215,6 +252,7 @@ fn main() {
             list_customers,
             create_customer,
             list_purchases,
+            list_sales,
             create_purchase,
             get_setting,
             set_setting,

@@ -260,7 +260,6 @@
   background: transparent;
   border: 0;
   border-top: 1px solid var(--line);
-  cursor: pointer;
 }
 
 .profile-avatar {
@@ -669,6 +668,11 @@
   background: #319876;
 }
 
+.bar.is-empty {
+  min-height: 0;
+  background: transparent;
+}
+
 .bar-column small {
   color: var(--subtle);
   font-size: 8px;
@@ -812,6 +816,24 @@ tbody tr:last-child td {
   display: grid;
   grid-template-columns: minmax(240px, 330px) minmax(0, 1fr);
   gap: 16px;
+}
+
+.batch-ledger {
+  grid-column: 1 / -1;
+}
+
+.page-error {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 12px;
+  padding-top: 10px;
+  padding-bottom: 10px;
+  color: #b65f54;
+  font-size: 11px;
+  background: #fff0ed;
+  border-radius: 8px;
 }
 
 .inventory-form {

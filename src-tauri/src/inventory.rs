@@ -45,6 +45,7 @@ pub struct BatchBalance {
     pub batch_number: String,
     pub expiry_date: String,
     pub available_units: i64,
+    pub is_expired: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -303,7 +304,8 @@ pub fn batch_balances(
     }
     let mut statement = connection.prepare(
         "SELECT batches.id, batches.batch_number, batches.expiry_date,
-                COALESCE(SUM(stock_movements.delta_units), 0) AS available_units
+                COALESCE(SUM(stock_movements.delta_units), 0) AS available_units,
+                batches.expiry_date < date('now', 'localtime') AS is_expired
          FROM batches
          LEFT JOIN stock_movements ON stock_movements.batch_id = batches.id
          WHERE batches.product_id = ?1
@@ -318,6 +320,7 @@ pub fn batch_balances(
                 batch_number: row.get(1)?,
                 expiry_date: row.get(2)?,
                 available_units: row.get(3)?,
+                is_expired: row.get(4)?,
             })
         })?
         .collect::<Result<Vec<_>, _>>()?;
@@ -332,6 +335,7 @@ pub fn list_products(connection: &Connection) -> Result<Vec<ProductSummary>, Inv
                 COALESCE(SUM(stock_movements.delta_units), 0) AS available_units
          FROM products
          LEFT JOIN batches ON batches.product_id = products.id
+                            AND batches.expiry_date >= date('now', 'localtime')
          LEFT JOIN stock_movements ON stock_movements.batch_id = batches.id
          WHERE products.is_enabled = 1
          GROUP BY products.id
@@ -450,6 +454,10 @@ mod tests {
 
         let balances = batch_balances(&connection, product_id).expect("read batch balances");
         assert_eq!(balances.len(), 2);
+        assert_eq!(
+            list_products(&connection).expect("list sellable product stock")[0].available_units,
+            3
+        );
         assert!(!balances.iter().any(|batch| batch.batch_id == first_batch));
         assert_eq!(
             balances

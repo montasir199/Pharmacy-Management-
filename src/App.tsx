@@ -1,11 +1,9 @@
 import { useEffect, useState } from 'react'
 import type { FormEvent } from 'react'
-import { invoke } from '@tauri-apps/api/core'
+import { invoke, isTauri } from '@tauri-apps/api/core'
 import { check } from '@tauri-apps/plugin-updater'
 import {
   Activity,
-  ArrowDownLeft,
-  ArrowUpLeft,
   Bell,
   Boxes,
   ChartNoAxesCombined,
@@ -15,7 +13,6 @@ import {
   CreditCard,
   Globe2,
   LayoutDashboard,
-  LogOut,
   Menu,
   Moon,
   Package,
@@ -41,20 +38,28 @@ type ProductSummary = {
   reorderLevelUnits: number
   availableUnits: number
 }
+type BatchBalance = {
+  batchId: number
+  batchNumber: string
+  expiryDate: string
+  availableUnits: number
+  isExpired: boolean
+}
+type SaleSummary = {
+  id: number
+  invoiceNumber: string
+  customerName: string | null
+  soldAt: string
+  totalMinor: number
+  status: string
+}
 type DashboardSummary = {
   todaySalesMinor: number
   todayOrders: number
-  productCount: number
+  stockUnits: number
   lowStockCount: number
-  recentSales: {
-    id: number
-    invoiceNumber: string
-    customerName: string
-    soldAt: string
-    totalMinor: number
-    status: string
-  }[]
-  dailySalesMinor: number[]
+  recentSales: SaleSummary[]
+  dailySales: { date: string; totalMinor: number }[]
 }
 type CustomerSummary = { id: number; name: string; phone: string | null }
 type PurchaseSummary = {
@@ -96,6 +101,10 @@ function App() {
   const [activePage, setActivePage] = useState<NavigationKey>('dashboard')
   const [sidebarOpen, setSidebarOpen] = useState(false)
   const [products, setProducts] = useState<ProductSummary[]>([])
+  const [batchBalanceResult, setBatchBalanceResult] = useState<{
+    productId: string
+    balances: BatchBalance[]
+  } | null>(null)
   const [inventoryError, setInventoryError] = useState('')
   const [inventoryLoading, setInventoryLoading] = useState(false)
   const [productNameAr, setProductNameAr] = useState('')
@@ -110,6 +119,10 @@ function App() {
   const [purchaseReference, setPurchaseReference] = useState('')
   const [supplierName, setSupplierName] = useState('')
   const [purchaseTotal, setPurchaseTotal] = useState('')
+  const [purchaseProductId, setPurchaseProductId] = useState('')
+  const [purchaseBatchNumber, setPurchaseBatchNumber] = useState('')
+  const [purchaseExpiry, setPurchaseExpiry] = useState('')
+  const [purchaseQuantity, setPurchaseQuantity] = useState('')
   const [pharmacyName, setPharmacyName] = useState('')
   const [batchNumber, setBatchNumber] = useState('')
   const [batchExpiry, setBatchExpiry] = useState('')
@@ -121,6 +134,9 @@ function App() {
   const [saleQuantity, setSaleQuantity] = useState('')
   const [salePrice, setSalePrice] = useState('')
   const [globalSearch, setGlobalSearch] = useState('')
+  const [productBarcode, setProductBarcode] = useState('')
+  const [reorderLevel, setReorderLevel] = useState('0')
+  const [sales, setSales] = useState<SaleSummary[]>([])
   const [availableUpdate, setAvailableUpdate] = useState<{
     version: string
     body?: string
@@ -128,6 +144,16 @@ function App() {
   const [updateStatus, setUpdateStatus] = useState<'idle' | 'checking' | 'downloading' | 'error'>('idle')
   const [updateError, setUpdateError] = useState('')
   const isArabic = i18n.resolvedLanguage !== 'en'
+  const formatMoney = (minor: number) => new Intl.NumberFormat(
+    isArabic ? 'ar-SA' : 'en-US',
+    { style: 'currency', currency: 'SAR' },
+  ).format(minor / 100)
+  const formatCompactAmount = (minor: number) => new Intl.NumberFormat(
+    isArabic ? 'ar' : 'en',
+    { notation: 'compact', maximumFractionDigits: 1 },
+  ).format(minor / 100)
+  const dailySales = dashboard?.dailySales ?? []
+  const chartMax = Math.max(...dailySales.map((day) => day.totalMinor), 0)
 
   useEffect(() => {
     document.documentElement.lang = isArabic ? 'ar' : 'en'
@@ -135,7 +161,9 @@ function App() {
   }, [isArabic])
 
   useEffect(() => {
+    if (!isTauri()) return
     void checkForUpdate()
+    void refreshSetting()
   }, [])
 
   async function checkForUpdate() {
@@ -175,6 +203,7 @@ function App() {
     if (activePage === 'sales' || activePage === 'reports') {
       void refreshDashboard()
       void refreshCustomers()
+      void refreshSales()
     }
   }, [activePage])
 
@@ -184,6 +213,21 @@ function App() {
     if (activePage === 'purchases') void refreshPurchases()
     if (activePage === 'settings') void refreshSetting()
   }, [activePage])
+
+  useEffect(() => {
+    let active = true
+    if (!batchProductId) return
+    void invoke<BatchBalance[]>('get_batch_balances', {
+      productId: Number(batchProductId),
+    }).then((result) => {
+      if (active) setBatchBalanceResult({ productId: batchProductId, balances: result })
+    }).catch((error: unknown) => {
+      if (active) setInventoryError(error instanceof Error ? error.message : String(error))
+    })
+    return () => {
+      active = false
+    }
+  }, [batchProductId])
 
   async function refreshDashboard() {
     try {
@@ -209,6 +253,26 @@ function App() {
     }
   }
 
+  async function refreshSales() {
+    try {
+      setSales(await invoke<SaleSummary[]>('list_sales'))
+    } catch (error) {
+      setInventoryError(error instanceof Error ? error.message : String(error))
+    }
+  }
+
+  async function refreshBatchBalances() {
+    if (!batchProductId) return
+    try {
+      const balances = await invoke<BatchBalance[]>('get_batch_balances', {
+        productId: Number(batchProductId),
+      })
+      setBatchBalanceResult({ productId: batchProductId, balances })
+    } catch (error) {
+      setInventoryError(error instanceof Error ? error.message : String(error))
+    }
+  }
+
   async function refreshSetting() {
     try {
       setPharmacyName(await invoke<string>('get_setting', { key: 'pharmacy_name' }))
@@ -219,17 +283,27 @@ function App() {
 
   const createPurchase = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
+    setInventoryError('')
     try {
       await invoke<number>('create_purchase', {
         referenceNumber: purchaseReference,
         supplierName,
-        totalMinor: Math.round(Number(purchaseTotal) * 100),
+        productId: Number(purchaseProductId),
+        batchNumber: purchaseBatchNumber,
+        expiryDate: purchaseExpiry,
+        quantity: Number(purchaseQuantity),
+        unitCostMinor: Math.round(Number(purchaseTotal) * 100),
       })
       setPurchaseReference('')
       setSupplierName('')
       setPurchaseTotal('')
+      setPurchaseProductId('')
+      setPurchaseBatchNumber('')
+      setPurchaseExpiry('')
+      setPurchaseQuantity('')
       await refreshPurchases()
       await refreshDashboard()
+      await refreshProducts()
     } catch (error) {
       setInventoryError(error instanceof Error ? error.message : String(error))
     }
@@ -237,6 +311,7 @@ function App() {
 
   const saveSetting = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
+    setInventoryError('')
     try {
       await invoke('set_setting', { key: 'pharmacy_name', value: pharmacyName })
     } catch (error) {
@@ -246,6 +321,7 @@ function App() {
 
   const receiveBatch = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
+    setInventoryError('')
     try {
       await invoke<number>('receive_batch', {
         productId: Number(batchProductId),
@@ -258,6 +334,7 @@ function App() {
       setBatchExpiry('')
       setBatchUnits('')
       await refreshProducts()
+      await refreshBatchBalances()
       await refreshDashboard()
     } catch (error) {
       setInventoryError(error instanceof Error ? error.message : String(error))
@@ -266,6 +343,7 @@ function App() {
 
   const createSale = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
+    setInventoryError('')
     try {
       await invoke<number>('create_sale', {
         invoiceNumber: saleInvoice,
@@ -282,6 +360,7 @@ function App() {
       setSalePrice('')
       await refreshDashboard()
       await refreshProducts()
+      await refreshSales()
     } catch (error) {
       setInventoryError(error instanceof Error ? error.message : String(error))
     }
@@ -289,6 +368,7 @@ function App() {
 
   const createCustomer = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
+    setInventoryError('')
     try {
       await invoke<number>('create_customer', { name: customerName, phone: customerPhone || null })
       setCustomerName('')
@@ -318,16 +398,18 @@ function App() {
     try {
       await invoke<number>('create_product', {
         sku: productSku,
-        barcode: null,
-        name_ar: productNameAr,
-        name_en: productNameEn,
-        base_unit: baseUnit,
-        reorder_level_units: 0,
+        barcode: productBarcode || null,
+        nameAr: productNameAr,
+        nameEn: productNameEn,
+        baseUnit,
+        reorderLevelUnits: Number(reorderLevel),
       })
       setProductSku('')
       setProductNameAr('')
       setProductNameEn('')
       setBaseUnit('')
+      setProductBarcode('')
+      setReorderLevel('0')
       await refreshProducts()
     } catch (error) {
       setInventoryError(error instanceof Error ? error.message : String(error))
@@ -407,7 +489,7 @@ function App() {
           <div className="branch-avatar">د</div>
           <div className="branch-copy">
             <span>{t('currentBranch')}</span>
-            <strong>{t('branchName')}</strong>
+            <strong>{pharmacyName || t('branchName')}</strong>
           </div>
           <ChevronDown size={16} className="muted-icon" />
         </div>
@@ -437,21 +519,16 @@ function App() {
         <div className="sidebar-spacer" />
         <div className="help-card">
           <div className="help-icon"><CircleHelp size={19} /></div>
-          <strong>{t('needHelp')}</strong>
-          <p>{t('helpDescription')}</p>
-          <button type="button" className="help-link">
-            {t('contactSupport')}
-            <ArrowUpLeft size={15} />
-          </button>
+          <strong>{t('localDataTitle')}</strong>
+          <p>{t('localDataDescription')}</p>
         </div>
-        <button className="profile" type="button">
+        <div className="profile">
           <div className="profile-avatar">م</div>
           <div className="profile-info">
-            <strong>{t('userName')}</strong>
-            <span>{t('adminRole')}</span>
+            <strong>{t('adminRole')}</strong>
+            <span>{t('localSession')}</span>
           </div>
-          <LogOut size={17} className="muted-icon" />
-        </button>
+        </div>
       </aside>
 
       <main className="workspace">
@@ -505,12 +582,19 @@ function App() {
               className="icon-button notification-button"
               type="button"
               aria-label={t('notifications')}
+              onClick={() => setActivePage('inventory')}
             >
               <Bell size={18} />
-              <span className="notification-dot" />
+              {(dashboard?.lowStockCount ?? 0) > 0 && <span className="notification-dot" />}
             </button>
           </div>
         </header>
+        {inventoryError && (
+          <div className="page-content page-error" role="alert">
+            <span>{inventoryError}</span>
+            <button type="button" className="text-button" onClick={() => setInventoryError('')}>{t('dismiss')}</button>
+          </div>
+        )}
 
         {activePage === 'dashboard' ? (
           <section className="page-content">
@@ -519,7 +603,7 @@ function App() {
                 <h2>{t('dashboardHeading')}</h2>
                 <p>{t('dashboardDescription')}</p>
               </div>
-              <button className="primary-button" type="button">
+              <button className="primary-button" type="button" onClick={() => setActivePage('sales')}>
                 <Plus size={18} />
                 {t('newSale')}
               </button>
@@ -529,29 +613,29 @@ function App() {
               <article className="stat-card">
                 <div className="stat-top">
                   <span className="stat-icon mint"><CreditCard size={19} /></span>
-                  <span className="stat-change positive"><ArrowUpLeft size={14} /> 12.8%</span>
+                  <span className="stat-change">{t('liveData')}</span>
                 </div>
                 <p>{t('todaySales')}</p>
-                <strong className="stat-value">{dashboard ? `${(dashboard.todaySalesMinor / 100).toLocaleString()} ر.س` : '0 ر.س'}</strong>
-                <span className="stat-note">{t('comparedYesterday')}</span>
+                <strong className="stat-value">{dashboard ? formatMoney(dashboard.todaySalesMinor) : '—'}</strong>
+                <span className="stat-note">{t('recordedToday')}</span>
               </article>
               <article className="stat-card">
                 <div className="stat-top">
                   <span className="stat-icon blue"><ShoppingCart size={19} /></span>
-                  <span className="stat-change positive"><ArrowUpLeft size={14} /> 8.2%</span>
+                  <span className="stat-change">{t('liveData')}</span>
                 </div>
                 <p>{t('ordersToday')}</p>
-                <strong className="stat-value">{dashboard?.todayOrders ?? 0}</strong>
-                <span className="stat-note">{t('ordersCompared')}</span>
+                <strong className="stat-value">{dashboard?.todayOrders ?? '—'}</strong>
+                <span className="stat-note">{t('recordedToday')}</span>
               </article>
               <article className="stat-card">
                 <div className="stat-top">
                   <span className="stat-icon amber"><Package size={19} /></span>
-                  <span className="stat-change negative"><ArrowDownLeft size={14} /> 4.1%</span>
+                  <span className="stat-change">{t('liveData')}</span>
                 </div>
                 <p>{t('productsInStock')}</p>
-                <strong className="stat-value">{dashboard?.productCount ?? 0}</strong>
-                <span className="stat-note">{t('productsCompared')}</span>
+                <strong className="stat-value">{dashboard?.stockUnits ?? '—'}</strong>
+                <span className="stat-note">{t('availableBaseUnits')}</span>
               </article>
               <article className="stat-card">
                 <div className="stat-top">
@@ -559,7 +643,7 @@ function App() {
                   <span className="stat-alert">{t('needsAttention')}</span>
                 </div>
                 <p>{t('lowStockProducts')}</p>
-                <strong className="stat-value">{dashboard?.lowStockCount ?? 0}</strong>
+                <strong className="stat-value">{dashboard?.lowStockCount ?? '—'}</strong>
                 <span className="stat-note">{t('lowStockNote')}</span>
               </article>
             </div>
@@ -571,29 +655,28 @@ function App() {
                     <h3>{t('salesOverview')}</h3>
                     <p>{t('salesOverviewDescription')}</p>
                   </div>
-                  <select aria-label={t('period')}>
-                    <option>{t('thisWeek')}</option>
-                    <option>{t('thisMonth')}</option>
-                  </select>
                 </div>
                 <div className="chart-summary">
-                  <strong>{t('sampleSalesValue')}</strong>
+                  <strong>{formatMoney(dashboard?.dailySales.reduce((sum, day) => sum + day.totalMinor, 0) ?? 0)}</strong>
                   <span className="chart-legend"><i /> {t('sales')}</span>
                 </div>
                 <div className="chart" role="img" aria-label={t('salesChart')}>
                   <div className="chart-grid">
-                    <span>{t('chartTop')}</span><span>{t('chartMidHigh')}</span>
-                    <span>{t('chartMid')}</span><span>{t('chartLow')}</span>
-                    <span>{t('chartBottom')}</span>
+                    <span>{formatCompactAmount(chartMax)}</span>
+                    <span>{formatCompactAmount(Math.round(chartMax * 0.75))}</span>
+                    <span>{formatCompactAmount(Math.round(chartMax * 0.5))}</span>
+                    <span>{formatCompactAmount(Math.round(chartMax * 0.25))}</span>
+                    <span>{formatCompactAmount(0)}</span>
                   </div>
                   <div className="chart-bars" aria-hidden="true">
-                    {(dashboard?.dailySalesMinor ?? [0, 0, 0, 0, 0, 0, 0]).map((amount, index) => {
-                      const max = Math.max(...(dashboard?.dailySalesMinor ?? [1]), 1)
-                      const height = max > 0 ? Math.max(8, (amount / max) * 100) : 8
+                    {dailySales.map((day, index, days) => {
+                      const height = chartMax > 0 && day.totalMinor > 0
+                        ? Math.max(4, (day.totalMinor / chartMax) * 100)
+                        : 0
                       return (
                       <div className="bar-column" key={index}>
-                        <span className={index === 10 ? 'bar is-highlighted' : 'bar'} style={{ height: `${height}%` }} />
-                        <small>{t(`days.${index}`)}</small>
+                        <span className={`${index === days.length - 1 ? 'bar is-highlighted' : 'bar'} ${height === 0 ? 'is-empty' : ''}`} style={{ height: `${height}%` }} title={formatMoney(day.totalMinor)} />
+                        <small>{new Date(`${day.date}T12:00:00`).toLocaleDateString(isArabic ? 'ar' : 'en', { weekday: 'short' })}</small>
                       </div>
                       )
                     })}
@@ -630,7 +713,7 @@ function App() {
                     <h3>{t('recentTransactions')}</h3>
                     <p>{t('recentTransactionsDescription')}</p>
                   </div>
-                  <button className="text-button" type="button">{t('viewAll')}</button>
+                  <button className="text-button" type="button" onClick={() => setActivePage('sales')}>{t('viewAll')}</button>
                 </div>
                 <div className="table-scroll">
                   <table>
@@ -647,9 +730,9 @@ function App() {
                       {(dashboard?.recentSales ?? []).map((sale) => (
                         <tr key={sale.id}>
                           <td><span className="invoice-number">#{sale.invoiceNumber}</span></td>
-                          <td><span className="customer-cell"><i className="customer-avatar ca-one">{sale.customerName.charAt(0)}</i>{sale.customerName}</span></td>
+                          <td><span className="customer-cell"><i className="customer-avatar ca-one">{(sale.customerName ?? t('cashCustomer')).charAt(0)}</i>{sale.customerName ?? t('cashCustomer')}</span></td>
                           <td>{new Date(sale.soldAt).toLocaleString(isArabic ? 'ar' : 'en')}</td>
-                          <td className="amount-cell">{(sale.totalMinor / 100).toLocaleString(isArabic ? 'ar-SA' : 'en-US')} ر.س</td>
+                          <td className="amount-cell">{formatMoney(sale.totalMinor)}</td>
                           <td><span className={`status-pill ${sale.status}`}>{t(sale.status)}</span></td>
                         </tr>
                       ))}
@@ -691,7 +774,7 @@ function App() {
                     {products
                       .filter((product) => {
                         const query = globalSearch.trim().toLocaleLowerCase()
-                        return !query || [product.nameAr, product.nameEn, product.sku]
+                        return !query || [product.nameAr, product.nameEn, product.sku, product.barcode ?? '']
                           .some((value) => value.toLocaleLowerCase().includes(query))
                       })
                       .map((product) => (
@@ -750,6 +833,14 @@ function App() {
                   <span>{t('baseUnit')}</span>
                   <input value={baseUnit} onChange={(event) => setBaseUnit(event.target.value)} required />
                 </label>
+                <label>
+                  <span>{t('barcodeOptional')}</span>
+                  <input value={productBarcode} onChange={(event) => setProductBarcode(event.target.value)} />
+                </label>
+                <label>
+                  <span>{t('reorderLevel')}</span>
+                  <input type="number" min="0" step="1" value={reorderLevel} onChange={(event) => setReorderLevel(event.target.value)} required />
+                </label>
                 <button className="primary-button" type="submit">{t('saveProduct')}</button>
               </form>
 
@@ -770,7 +861,6 @@ function App() {
                   </div>
                   <span className="inventory-count">{products.length}</span>
                 </div>
-                {inventoryError && <p className="inventory-error" role="alert">{inventoryError}</p>}
                 <div className="table-scroll">
                   <table>
                     <thead>
@@ -801,6 +891,37 @@ function App() {
                     </tbody>
                   </table>
                 </div>
+              </section>
+              <section className="panel inventory-products batch-ledger">
+                <div className="panel-heading">
+                  <div>
+                    <h3>{t('batchLedger')}</h3>
+                    <p>{t('batchLedgerDescription')}</p>
+                  </div>
+                </div>
+                {!batchProductId ? (
+                  <p className="inventory-empty">{t('selectBatchProduct')}</p>
+                ) : (
+                  <div className="table-scroll">
+                    <table>
+                      <thead><tr><th>{t('batchNumber')}</th><th>{t('expiryDate')}</th><th>{t('availableUnits')}</th><th>{t('status')}</th></tr></thead>
+                      <tbody>
+                        {(batchBalanceResult?.productId === batchProductId ? batchBalanceResult.balances : []).map((batch) => {
+                          const expired = batch.isExpired
+                          return (
+                            <tr key={batch.batchId}>
+                              <td>{batch.batchNumber}</td>
+                              <td>{batch.expiryDate}</td>
+                              <td>{batch.availableUnits}</td>
+                              <td><span className={expired ? 'stock-low' : 'stock-ok'}>{expired ? t('expired') : t('valid')}</span></td>
+                            </tr>
+                          )
+                        })}
+                        {(batchBalanceResult?.productId === batchProductId ? batchBalanceResult.balances : []).length === 0 && <tr><td colSpan={4} className="inventory-empty">{t('noBatchBalances')}</td></tr>}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
               </section>
             </div>
           </section>
@@ -839,13 +960,17 @@ function App() {
               <form className="panel inventory-form" onSubmit={createPurchase}>
                 <label><span>{t('purchaseReference')}</span><input value={purchaseReference} onChange={(e) => setPurchaseReference(e.target.value)} required /></label>
                 <label><span>{t('supplierName')}</span><input value={supplierName} onChange={(e) => setSupplierName(e.target.value)} required /></label>
-                <label><span>{t('purchaseTotal')}</span><input type="number" min="0" step="0.01" value={purchaseTotal} onChange={(e) => setPurchaseTotal(e.target.value)} required /></label>
-                <button className="primary-button" type="submit">{t('savePurchase')}</button>
+                <label><span>{t('product')}</span><select value={purchaseProductId} onChange={(e) => setPurchaseProductId(e.target.value)} required><option value="">--</option>{products.map((product) => <option key={product.id} value={product.id}>{isArabic ? product.nameAr : product.nameEn}</option>)}</select></label>
+                <label><span>{t('batchNumber')}</span><input value={purchaseBatchNumber} onChange={(e) => setPurchaseBatchNumber(e.target.value)} required /></label>
+                <label><span>{t('expiryDate')}</span><input type="date" value={purchaseExpiry} onChange={(e) => setPurchaseExpiry(e.target.value)} required /></label>
+                <label><span>{t('quantityUnits')}</span><input type="number" min="1" step="1" value={purchaseQuantity} onChange={(e) => setPurchaseQuantity(e.target.value)} required /></label>
+                <label><span>{t('unitCost')}</span><input type="number" min="0" step="0.01" value={purchaseTotal} onChange={(e) => setPurchaseTotal(e.target.value)} required /></label>
+                <button className="primary-button" type="submit">{t('savePurchaseAndStock')}</button>
               </form>
               <section className="panel inventory-products">
                 <div className="table-scroll"><table><thead><tr><th>{t('purchaseReference')}</th><th>{t('supplierName')}</th><th>{t('amount')}</th><th>{t('status')}</th></tr></thead>
                   <tbody>{purchases.map((purchase) => (
-                    <tr key={purchase.id}><td>{purchase.referenceNumber}</td><td>{purchase.supplierName}</td><td>{(purchase.totalMinor / 100).toLocaleString(isArabic ? 'ar-SA' : 'en-US')} ر.س</td><td>{t(purchase.status)}</td></tr>
+                    <tr key={purchase.id}><td>{purchase.referenceNumber}</td><td>{purchase.supplierName}</td><td>{formatMoney(purchase.totalMinor)}</td><td>{t(purchase.status)}</td></tr>
                   ))}
                   {purchases.length === 0 && <tr><td colSpan={4} className="inventory-empty">{t('noPurchases')}</td></tr>}</tbody>
                 </table></div>
@@ -863,6 +988,13 @@ function App() {
         ) : activePage === 'sales' || activePage === 'reports' ? (
           <section className="page-content inventory-page">
             <div className="page-heading"><div><h2>{activeTitle}</h2><p>{t('operationalDataDescription')}</p></div></div>
+            {activePage === 'reports' && (
+              <div className="stats-grid report-stats">
+                <article className="stat-card"><p>{t('paidSalesTotal')}</p><strong className="stat-value">{formatMoney(sales.filter((sale) => sale.status === 'paid').reduce((sum, sale) => sum + sale.totalMinor, 0))}</strong></article>
+                <article className="stat-card"><p>{t('invoiceCount')}</p><strong className="stat-value">{sales.length}</strong></article>
+                <article className="stat-card"><p>{t('productsInStock')}</p><strong className="stat-value">{dashboard?.stockUnits ?? '—'}</strong></article>
+              </div>
+            )}
             {activePage === 'sales' && (
               <form className="panel inventory-form sale-form" onSubmit={createSale}>
                 <label><span>{t('invoice')}</span><input value={saleInvoice} onChange={(e) => setSaleInvoice(e.target.value)} required /></label>
@@ -875,20 +1007,16 @@ function App() {
             )}
             <section className="panel inventory-products">
               <div className="table-scroll"><table><thead><tr><th>{t('invoice')}</th><th>{t('customer')}</th><th>{t('date')}</th><th>{t('amount')}</th><th>{t('status')}</th></tr></thead>
-                <tbody>{(dashboard?.recentSales ?? []).map((sale) => (
-                  <tr key={sale.id}><td>{sale.invoiceNumber}</td><td>{sale.customerName}</td><td>{new Date(sale.soldAt).toLocaleString(isArabic ? 'ar' : 'en')}</td><td>{(sale.totalMinor / 100).toLocaleString(isArabic ? 'ar-SA' : 'en-US')} ر.س</td><td>{t(sale.status)}</td></tr>
+                <tbody>{sales.map((sale) => (
+                  <tr key={sale.id}><td>{sale.invoiceNumber}</td><td>{sale.customerName ?? t('cashCustomer')}</td><td>{new Date(sale.soldAt).toLocaleString(isArabic ? 'ar' : 'en')}</td><td>{formatMoney(sale.totalMinor)}</td><td>{t(sale.status)}</td></tr>
                 ))}
-                {dashboard?.recentSales.length === 0 && <tr><td colSpan={5} className="inventory-empty">{t('noTransactions')}</td></tr>}</tbody>
+                {sales.length === 0 && <tr><td colSpan={5} className="inventory-empty">{t('noTransactions')}</td></tr>}</tbody>
               </table></div>
             </section>
           </section>
         ) : (
-          <section className="page-content section-placeholder">
-            <div className="placeholder-card">
-              <div className="placeholder-icon"><LayoutDashboard size={24} /></div>
-              <h2>{activeTitle}</h2>
-              <p>{t('sectionComingSoon')}</p>
-            </div>
+          <section className="page-content section-placeholder" aria-live="polite">
+            <div className="placeholder-card"><h2>{activeTitle}</h2><p>{t('pageUnavailable')}</p></div>
           </section>
         )}
       </main>

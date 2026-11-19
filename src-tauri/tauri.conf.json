@@ -1,5 +1,4 @@
 {
-  "$schema": "https://schema.tauri.app/config/2",
   "productName": "Dawai Pharmacy",
   "version": "0.2.0",
   "identifier": "com.dawai.pharmacy",
@@ -29,7 +28,14 @@
     "category": "Business",
     "shortDescription": "Offline pharmacy management",
     "longDescription": "Arabic and English offline desktop pharmacy management system.",
-    "createUpdaterArtifacts": true
+    "createUpdaterArtifacts": true,
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ]
   },
   "plugins": {
     "updater": {
