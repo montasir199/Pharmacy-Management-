@@ -47,6 +47,19 @@ pub struct BatchBalance {
     pub available_units: i64,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProductSummary {
+    pub id: i64,
+    pub sku: String,
+    pub barcode: Option<String>,
+    pub name_ar: String,
+    pub name_en: String,
+    pub base_unit: String,
+    pub reorder_level_units: i64,
+    pub available_units: i64,
+}
+
 #[derive(Debug)]
 struct AvailableBatch {
     batch_id: i64,
@@ -309,6 +322,36 @@ pub fn batch_balances(
         })?
         .collect::<Result<Vec<_>, _>>()?;
     Ok(balances)
+}
+
+pub fn list_products(connection: &Connection) -> Result<Vec<ProductSummary>, InventoryError> {
+    let mut statement = connection.prepare(
+        "SELECT products.id, products.sku, products.barcode,
+                products.name_ar, products.name_en, products.base_unit,
+                products.reorder_level_units,
+                COALESCE(SUM(stock_movements.delta_units), 0) AS available_units
+         FROM products
+         LEFT JOIN batches ON batches.product_id = products.id
+         LEFT JOIN stock_movements ON stock_movements.batch_id = batches.id
+         WHERE products.is_enabled = 1
+         GROUP BY products.id
+         ORDER BY products.name_ar COLLATE NOCASE ASC",
+    )?;
+    let products = statement
+        .query_map([], |row| {
+            Ok(ProductSummary {
+                id: row.get(0)?,
+                sku: row.get(1)?,
+                barcode: row.get(2)?,
+                name_ar: row.get(3)?,
+                name_en: row.get(4)?,
+                base_unit: row.get(5)?,
+                reorder_level_units: row.get(6)?,
+                available_units: row.get(7)?,
+            })
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(products)
 }
 
 fn is_valid_date(connection: &Connection, date: &str) -> Result<bool, rusqlite::Error> {

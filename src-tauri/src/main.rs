@@ -2,6 +2,7 @@
 
 mod database;
 mod inventory;
+mod operations;
 
 use std::sync::Mutex;
 use tauri::Manager;
@@ -87,10 +88,115 @@ fn get_batch_balances(
     inventory::batch_balances(&connection, product_id).map_err(|error| error.to_string())
 }
 
+#[tauri::command]
+fn list_products(
+    state: tauri::State<'_, DatabaseState>,
+) -> Result<Vec<inventory::ProductSummary>, String> {
+    let connection = state
+        .connection
+        .lock()
+        .map_err(|_| "database state is unavailable".to_owned())?;
+    inventory::list_products(&connection).map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn get_dashboard(
+    state: tauri::State<'_, DatabaseState>,
+) -> Result<operations::DashboardSummary, String> {
+    let connection = state.connection.lock()
+        .map_err(|_| "database state is unavailable".to_owned())?;
+    operations::dashboard(&connection).map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn list_customers(
+    state: tauri::State<'_, DatabaseState>,
+) -> Result<Vec<operations::CustomerSummary>, String> {
+    let connection = state.connection.lock()
+        .map_err(|_| "database state is unavailable".to_owned())?;
+    operations::list_customers(&connection).map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn create_customer(
+    state: tauri::State<'_, DatabaseState>,
+    name: String,
+    phone: Option<String>,
+) -> Result<i64, String> {
+    let connection = state.connection.lock()
+        .map_err(|_| "database state is unavailable".to_owned())?;
+    operations::create_customer(&connection, &name, phone.as_deref())
+}
+
+#[tauri::command]
+fn list_purchases(
+    state: tauri::State<'_, DatabaseState>,
+) -> Result<Vec<operations::PurchaseSummary>, String> {
+    let connection = state.connection.lock()
+        .map_err(|_| "database state is unavailable".to_owned())?;
+    operations::list_purchases(&connection).map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn create_purchase(
+    state: tauri::State<'_, DatabaseState>,
+    reference_number: String,
+    supplier_name: String,
+    total_minor: i64,
+) -> Result<i64, String> {
+    let mut connection = state.connection.lock()
+        .map_err(|_| "database state is unavailable".to_owned())?;
+    operations::create_purchase(&mut connection, &reference_number, &supplier_name, total_minor)
+}
+
+#[tauri::command]
+fn get_setting(
+    state: tauri::State<'_, DatabaseState>,
+    key: String,
+) -> Result<String, String> {
+    let connection = state.connection.lock()
+        .map_err(|_| "database state is unavailable".to_owned())?;
+    operations::get_setting(&connection, &key).map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn set_setting(
+    state: tauri::State<'_, DatabaseState>,
+    key: String,
+    value: String,
+) -> Result<(), String> {
+    let connection = state.connection.lock()
+        .map_err(|_| "database state is unavailable".to_owned())?;
+    operations::set_setting(&connection, &key, &value).map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn create_sale(
+    state: tauri::State<'_, DatabaseState>,
+    invoice_number: String,
+    customer_id: Option<i64>,
+    product_id: i64,
+    quantity: i64,
+    unit_price_minor: i64,
+    status: String,
+) -> Result<i64, String> {
+    let mut connection = state.connection.lock()
+        .map_err(|_| "database state is unavailable".to_owned())?;
+    operations::create_sale(
+        &mut connection,
+        &invoice_number,
+        customer_id,
+        &[(product_id, quantity, unit_price_minor)],
+        &status,
+    )
+}
+
 fn main() {
     tracing_subscriber::fmt().with_target(false).init();
 
     tauri::Builder::default()
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_process::init())
         .setup(|app| {
             let app_data_dir = app.path().app_data_dir()?;
             let connection = database::initialize(&app_data_dir)?;
@@ -103,7 +209,16 @@ fn main() {
             create_product,
             receive_batch,
             dispense_fefo,
-            get_batch_balances
+            get_batch_balances,
+            list_products,
+            get_dashboard,
+            list_customers,
+            create_customer,
+            list_purchases,
+            create_purchase,
+            get_setting,
+            set_setting,
+            create_sale
         ])
         .run(tauri::generate_context!())
         .expect("failed to run Pharmacy Management");

@@ -28,6 +28,7 @@ fn migrations() -> Migrations<'static> {
     Migrations::new(vec![
         M::up(include_str!("../migrations/0001_core.sql")),
         M::up(include_str!("../migrations/0002_inventory.sql")),
+        M::up(include_str!("../migrations/0003_operations.sql")),
     ])
 }
 
@@ -199,7 +200,7 @@ mod tests {
         let connection =
             Connection::open(directory.path().join(DATABASE_FILE)).expect("create database file");
         connection
-            .pragma_update(None, "user_version", 3)
+            .pragma_update(None, "user_version", 4)
             .expect("set future schema version");
         drop(connection);
 

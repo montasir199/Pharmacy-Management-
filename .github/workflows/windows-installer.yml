@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   build:
@@ -37,8 +37,53 @@ jobs:
       - name: Test Rust backend
         run: cargo test --manifest-path src-tauri/Cargo.toml
 
+      - name: Verify updater signing secrets
+        shell: pwsh
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: |
+          if (-not $env:TAURI_SIGNING_PRIVATE_KEY) {
+            throw "Missing GitHub secret TAURI_SIGNING_PRIVATE_KEY"
+          }
+          if (-not $env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD) {
+            throw "Missing GitHub secret TAURI_SIGNING_PRIVATE_KEY_PASSWORD"
+          }
+
       - name: Build Windows installer
         run: npm run tauri build -- --bundles nsis --ci
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+
+      - name: Create update manifest and GitHub release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $version = (Get-Content src-tauri/tauri.conf.json -Raw | ConvertFrom-Json).version
+          $tag = "v$version"
+          $bundleDir = "src-tauri/target/release/bundle/nsis"
+          $zip = Get-Item "$bundleDir/*.nsis.zip" | Select-Object -First 1
+          $signature = Get-Content "$($zip.FullName).sig" -Raw
+          $manifest = @{
+            version = $version
+            notes = "Update available for Dawai Pharmacy"
+            pub_date = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
+            platforms = @{
+              "windows-x86_64" = @{
+                signature = $signature.Trim()
+                url = "https://github.com/montasir199/Pharmacy-Management-/releases/download/$tag/$($zip.Name)"
+              }
+            }
+          } | ConvertTo-Json -Depth 5
+          Set-Content -Path "$bundleDir/latest.json" -Value $manifest -Encoding utf8
+          gh release delete $tag --yes --cleanup-tag 2>$null
+          gh release create $tag `
+            --target "${{ github.sha }}" `
+            --title "Dawai Pharmacy $version" `
+            --notes "Signed Windows installer for Dawai Pharmacy $version" `
+            "$bundleDir/*.exe" "$($zip.FullName)" "$bundleDir/latest.json"
 
       - name: Upload Windows installer
         uses: actions/upload-artifact@v4

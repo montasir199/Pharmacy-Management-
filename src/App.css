@@ -808,6 +808,119 @@ tbody tr:last-child td {
   place-items: center;
 }
 
+.inventory-grid {
+  display: grid;
+  grid-template-columns: minmax(240px, 330px) minmax(0, 1fr);
+  gap: 16px;
+}
+
+.inventory-form {
+  display: grid;
+  align-content: start;
+  gap: 12px;
+}
+
+.inventory-form label {
+  display: grid;
+  gap: 6px;
+  color: var(--subtle);
+  font-size: 10px;
+}
+
+.inventory-form input {
+  height: 38px;
+  padding: 0 10px;
+  color: var(--text);
+  background: var(--surface-muted);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  outline: 0;
+}
+
+.inventory-form input:focus {
+  border-color: var(--green);
+}
+
+.inventory-form select {
+  height: 38px;
+  padding: 0 10px;
+  color: var(--text);
+  background: var(--surface-muted);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+
+.sale-form {
+  grid-template-columns: repeat(5, minmax(120px, 1fr));
+  align-items: end;
+  margin-bottom: 16px;
+}
+
+.inventory-form .primary-button {
+  margin-top: 4px;
+}
+
+.inventory-count {
+  display: grid;
+  min-width: 28px;
+  height: 28px;
+  place-items: center;
+  color: var(--green-deep);
+  font-size: 11px;
+  background: var(--green-soft);
+  border-radius: 8px;
+}
+
+.inventory-products td strong,
+.inventory-products td small {
+  display: block;
+}
+
+.inventory-products td strong {
+  color: var(--text);
+  font-size: 11px;
+}
+
+.inventory-products td small {
+  margin-top: 2px;
+  color: var(--subtle);
+  font-size: 9px;
+}
+
+.inventory-error {
+  margin: 12px 0 0;
+  padding: 9px 10px;
+  color: #b65f54;
+  font-size: 10px;
+  background: #fff0ed;
+  border-radius: 8px;
+}
+
+.inventory-empty {
+  padding: 28px 10px;
+  text-align: center;
+}
+
+.stock-ok,
+.stock-low {
+  display: inline-flex;
+  min-width: 34px;
+  justify-content: center;
+  padding: 4px 7px;
+  font-weight: 600;
+  border-radius: 20px;
+}
+
+.stock-ok {
+  color: #218365;
+  background: #edf8f2;
+}
+
+.stock-low {
+  color: #b27b22;
+  background: #fff7e8;
+}
+
 .placeholder-card {
   display: grid;
   max-width: 390px;
@@ -844,6 +957,41 @@ tbody tr:last-child td {
 
 .sidebar-backdrop {
   display: none;
+}
+
+.update-banner {
+  position: fixed;
+  z-index: 40;
+  inset-block-start: 92px;
+  inset-inline-end: clamp(14px, 3vw, 36px);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  width: min(520px, calc(100vw - 28px));
+  padding: 12px 14px;
+  background: var(--surface);
+  border: 1px solid var(--green);
+  border-radius: 12px;
+  box-shadow: 0 14px 36px rgb(26 56 43 / 16%);
+}
+
+.update-banner > div {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.update-banner strong {
+  font-size: 12px;
+}
+
+.update-banner span {
+  overflow: hidden;
+  color: var(--subtle);
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 @media (max-width: 1120px) {
@@ -906,6 +1054,10 @@ tbody tr:last-child td {
 
   .recent-panel {
     grid-column: auto;
+  }
+
+  .inventory-grid {
+    grid-template-columns: minmax(0, 1fr);
   }
 }
 
