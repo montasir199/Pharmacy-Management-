@@ -120,6 +120,7 @@ function App() {
   const [saleCustomerId, setSaleCustomerId] = useState('')
   const [saleQuantity, setSaleQuantity] = useState('')
   const [salePrice, setSalePrice] = useState('')
+  const [globalSearch, setGlobalSearch] = useState('')
   const [availableUpdate, setAvailableUpdate] = useState<{
     version: string
     body?: string
@@ -168,7 +169,7 @@ function App() {
   }
 
   useEffect(() => {
-    if (activePage === 'inventory' || activePage === 'sales' || activePage === 'purchases') {
+    if (activePage === 'products' || activePage === 'inventory' || activePage === 'sales' || activePage === 'purchases') {
       void refreshProducts()
     }
     if (activePage === 'sales' || activePage === 'reports') {
@@ -472,7 +473,15 @@ function App() {
           <div className="topbar-actions">
             <label className="search-box">
               <Search size={17} />
-              <input aria-label={t('search')} placeholder={t('search')} />
+              <input
+                aria-label={t('search')}
+                placeholder={t('search')}
+                value={globalSearch}
+                onChange={(event) => setGlobalSearch(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter' && globalSearch.trim()) setActivePage('products')
+                }}
+              />
               <kbd>⌘ K</kbd>
             </label>
             <button
@@ -601,12 +610,12 @@ function App() {
                 </div>
                 <div className="quick-actions">
                   {[
-                    { icon: ShoppingCart, label: t('newSale'), color: 'mint' },
-                    { icon: Plus, label: t('addProduct'), color: 'blue' },
-                    { icon: ClipboardList, label: t('newPurchase'), color: 'amber' },
-                    { icon: Users, label: t('addCustomer'), color: 'violet' },
-                  ].map(({ icon: Icon, label, color }) => (
-                    <button className="quick-action" type="button" key={label}>
+                    { icon: ShoppingCart, label: t('newSale'), color: 'mint', page: 'sales' as NavigationKey },
+                    { icon: Plus, label: t('addProduct'), color: 'blue', page: 'inventory' as NavigationKey },
+                    { icon: ClipboardList, label: t('newPurchase'), color: 'amber', page: 'purchases' as NavigationKey },
+                    { icon: Users, label: t('addCustomer'), color: 'violet', page: 'customers' as NavigationKey },
+                  ].map(({ icon: Icon, label, color, page }) => (
+                    <button className="quick-action" type="button" key={label} onClick={() => setActivePage(page)}>
                       <span className={`quick-icon ${color}`}><Icon size={18} /></span>
                       <span>{label}</span>
                       <ChevronDown className="quick-chevron" size={15} />
@@ -652,6 +661,53 @@ function App() {
                 </div>
               </section>
             </div>
+          </section>
+        ) : activePage === 'products' ? (
+          <section className="page-content inventory-page">
+            <div className="page-heading">
+              <div>
+                <h2>{t('productsHeading')}</h2>
+                <p>{t('productsDescription')}</p>
+              </div>
+              <button className="primary-button" type="button" onClick={() => setActivePage('inventory')}>
+                <Plus size={18} />
+                {t('addProduct')}
+              </button>
+            </div>
+            <section className="panel inventory-products">
+              <label className="product-search">
+                <Search size={17} />
+                <input
+                  value={globalSearch}
+                  onChange={(event) => setGlobalSearch(event.target.value)}
+                  placeholder={t('searchProducts')}
+                  aria-label={t('searchProducts')}
+                />
+              </label>
+              <div className="table-scroll">
+                <table>
+                  <thead><tr><th>{t('product')}</th><th>{t('sku')}</th><th>{t('baseUnit')}</th><th>{t('availableUnits')}</th><th>{t('reorderLevel')}</th></tr></thead>
+                  <tbody>
+                    {products
+                      .filter((product) => {
+                        const query = globalSearch.trim().toLocaleLowerCase()
+                        return !query || [product.nameAr, product.nameEn, product.sku]
+                          .some((value) => value.toLocaleLowerCase().includes(query))
+                      })
+                      .map((product) => (
+                        <tr key={product.id}>
+                          <td><strong>{isArabic ? product.nameAr : product.nameEn}</strong><small>{isArabic ? product.nameEn : product.nameAr}</small></td>
+                          <td>{product.sku}</td>
+                          <td>{product.baseUnit}</td>
+                          <td><span className={product.availableUnits <= product.reorderLevelUnits ? 'stock-low' : 'stock-ok'}>{product.availableUnits}</span></td>
+                          <td>{product.reorderLevelUnits}</td>
+                        </tr>
+                      ))}
+                    {products.length === 0 && <tr><td colSpan={5} className="inventory-empty">{t('noProducts')}</td></tr>}
+                  </tbody>
+                </table>
+              </div>
+            </section>
           </section>
         ) : activePage === 'inventory' ? (
           <section className="page-content inventory-page">

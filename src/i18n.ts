@@ -131,6 +131,10 @@ const resources = {
       saveBatch: 'حفظ الدفعة',
       saveSale: 'حفظ فاتورة البيع',
       unitPrice: 'سعر الوحدة',
+      productsHeading: 'دليل المنتجات',
+      productsDescription: 'البحث والعرض والإدارة من سجلات المنتجات والمخزون.',
+      searchProducts: 'ابحث عن منتج أو رمز...',
+      reorderLevel: 'حد إعادة الطلب',
     },
   },
   en: {
@@ -262,6 +266,10 @@ const resources = {
       saveBatch: 'Save batch',
       saveSale: 'Save sale invoice',
       unitPrice: 'Unit price',
+      productsHeading: 'Product catalog',
+      productsDescription: 'Search and manage records from products and inventory.',
+      searchProducts: 'Search product or code...',
+      reorderLevel: 'Reorder level',
     },
   },
 } as const
