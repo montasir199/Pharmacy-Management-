@@ -225,6 +225,8 @@ function App() {
   const [purchases, setPurchases] = useState<PurchaseSummary[]>([])
   const [purchaseSearch, setPurchaseSearch] = useState('')
   const [customerSearch, setCustomerSearch] = useState('')
+  const [reportSearch, setReportSearch] = useState('')
+  const [reportPeriod, setReportPeriod] = useState<'7d' | '30d' | 'all'>('7d')
   const [purchaseReference, setPurchaseReference] = useState('')
   const [supplierName, setSupplierName] = useState('')
   const [purchaseTotal, setPurchaseTotal] = useState('')
@@ -1182,6 +1184,19 @@ function App() {
     const query = purchaseSearch.trim().toLocaleLowerCase()
     return !query || [purchase.referenceNumber, purchase.supplierName, purchase.status].some((value) => value.toLocaleLowerCase().includes(query))
   })
+  const reportStartDate = new Date()
+  reportStartDate.setHours(0, 0, 0, 0)
+  if (reportPeriod === '7d') reportStartDate.setDate(reportStartDate.getDate() - 6)
+  if (reportPeriod === '30d') reportStartDate.setDate(reportStartDate.getDate() - 29)
+  const filteredReportSales = sales.filter((sale) => {
+    if (sale.currencyCode !== saleCurrencyCode) return false
+    if (reportPeriod !== 'all' && new Date(sale.soldAt).getTime() < reportStartDate.getTime()) return false
+    const query = reportSearch.trim().toLocaleLowerCase()
+    return !query || [sale.invoiceNumber, sale.customerName ?? ''].some((value) => value.toLocaleLowerCase().includes(query))
+  })
+  const paidReportSales = filteredReportSales.filter((sale) => sale.status === 'paid')
+  const paidReportTotal = paidReportSales.reduce((sum, sale) => sum + sale.totalMinor, 0)
+  const averageReportSale = paidReportSales.length ? Math.round(paidReportTotal / paidReportSales.length) : 0
   const activeTitle = t(`nav.${activePage}`)
 
   return (
@@ -2032,11 +2047,29 @@ function App() {
           <section className="page-content inventory-page">
             <div className="page-heading"><div><h2>{activeTitle}</h2><p>{t('operationalDataDescription')}</p></div></div>
             {activePage === 'reports' && (
-              <div className="stats-grid report-stats">
-                <article className="stat-card"><p>{t('paidSalesTotal')}</p><strong className="stat-value">{formatMoney(sales.filter((sale) => sale.status === 'paid').reduce((sum, sale) => sum + sale.totalMinor, 0))}</strong></article>
-                <article className="stat-card"><p>{t('invoiceCount')}</p><strong className="stat-value">{sales.length}</strong></article>
-                <article className="stat-card"><p>{t('productsInStock')}</p><strong className="stat-value">{dashboard?.stockUnits ?? '—'}</strong></article>
-              </div>
+              <>
+                <div className="report-toolbar">
+                  <label className="report-period-control">
+                    <span>{t('reportPeriod')}</span>
+                    <select aria-label={t('reportPeriod')} value={reportPeriod} onChange={(event) => setReportPeriod(event.target.value as '7d' | '30d' | 'all')}>
+                      <option value="7d">{t('last7Days')}</option>
+                      <option value="30d">{t('last30Days')}</option>
+                      <option value="all">{t('allDates')}</option>
+                    </select>
+                  </label>
+                  <label className="product-search report-search">
+                    <Search size={17} />
+                    <input aria-label={t('searchInvoices')} value={reportSearch} onChange={(event) => setReportSearch(event.target.value)} placeholder={t('searchInvoices')} />
+                  </label>
+                  <span className="report-currency-note">{t('reportCurrencyNote', { currency: saleCurrencyCode })}</span>
+                </div>
+                <div className="stats-grid report-stats">
+                  <article className="stat-card"><p>{t('paidSalesTotal')}</p><strong className="stat-value">{formatMoney(paidReportTotal)}</strong><span className="stat-note">{t('selectedPeriod')}</span></article>
+                  <article className="stat-card"><p>{t('invoiceCount')}</p><strong className="stat-value">{filteredReportSales.length}</strong><span className="stat-note">{t('matchingInvoices')}</span></article>
+                  <article className="stat-card"><p>{t('averageInvoiceValue')}</p><strong className="stat-value">{formatMoney(averageReportSale)}</strong><span className="stat-note">{t('paidInvoicesOnly')}</span></article>
+                  <article className="stat-card"><p>{t('unpaidInvoices')}</p><strong className="stat-value">{filteredReportSales.filter((sale) => sale.status !== 'paid').length}</strong><span className="stat-note">{t('reviewRequired')}</span></article>
+                </div>
+              </>
             )}
             {activePage === 'sales' && (
               <>
@@ -2413,7 +2446,7 @@ function App() {
             <section className="panel inventory-products">
               <div className="panel-heading"><h3>{t('invoiceHistory')}</h3></div>
               <div className="table-scroll"><table><thead><tr><th>{t('invoice')}</th><th>{t('customer')}</th><th>{t('date')}</th><th>{t('amount')}</th><th>{t('paymentMethod')}</th><th>{t('status')}</th><th>{t('viewDetails')}</th></tr></thead>
-                <tbody>{sales.map((sale) => (
+                <tbody>{(activePage === 'reports' ? filteredReportSales : sales).map((sale) => (
                   <tr key={sale.id}>
                     <td>{sale.invoiceNumber}</td><td>{sale.customerName ?? t('cashCustomer')}</td>
                     <td>{new Date(sale.soldAt).toLocaleString(isArabic ? 'ar' : 'en')}</td>
@@ -2423,7 +2456,7 @@ function App() {
                     <td><button className="icon-button" type="button" aria-label={`${t('viewDetails')} ${sale.invoiceNumber}`} onClick={() => void showSaleDetails(sale.id)}><Eye size={16} /></button></td>
                   </tr>
                 ))}
-                {sales.length === 0 && <tr><td colSpan={7} className="inventory-empty">{t('noTransactions')}</td></tr>}</tbody>
+                {(activePage === 'reports' ? filteredReportSales.length : sales.length) === 0 && <tr><td colSpan={7} className="inventory-empty">{activePage === 'reports' && reportSearch ? t('noReportResults') : t('noTransactions')}</td></tr>}</tbody>
               </table></div>
             </section>
             {activePage === 'sales' && (
