@@ -224,6 +224,7 @@ function App() {
   const [customerPhone, setCustomerPhone] = useState('')
   const [purchases, setPurchases] = useState<PurchaseSummary[]>([])
   const [purchaseSearch, setPurchaseSearch] = useState('')
+  const [purchaseStatusFilter, setPurchaseStatusFilter] = useState<'all' | 'received'>('all')
   const [customerSearch, setCustomerSearch] = useState('')
   const [reportSearch, setReportSearch] = useState('')
   const [reportPeriod, setReportPeriod] = useState<'7d' | '30d' | 'all'>('7d')
@@ -1196,9 +1197,11 @@ function App() {
     return !query || [customer.name, customer.phone ?? ''].some((value) => value.toLocaleLowerCase().includes(query))
   })
   const filteredPurchases = purchases.filter((purchase) => {
+    if (purchaseStatusFilter === 'received' && purchase.status !== 'received') return false
     const query = purchaseSearch.trim().toLocaleLowerCase()
     return !query || [purchase.referenceNumber, purchase.supplierName, purchase.status].some((value) => value.toLocaleLowerCase().includes(query))
   })
+  const receivedPurchaseCount = purchases.filter((purchase) => purchase.status === 'received').length
   const reportStartDate = new Date()
   reportStartDate.setHours(0, 0, 0, 0)
   if (reportPeriod === '7d') reportStartDate.setDate(reportStartDate.getDate() - 6)
@@ -1906,6 +1909,7 @@ function App() {
               <article className="stat-card"><p>{t('purchaseRecords')}</p><strong className="stat-value">{purchases.length}</strong></article>
               <article className="stat-card"><p>{t('filteredPurchases')}</p><strong className="stat-value">{filteredPurchases.length}</strong></article>
               <article className="stat-card"><p>{t('purchaseValue')}</p><strong className="stat-value">{formatMoney(purchases.reduce((sum, purchase) => sum + purchase.totalMinor, 0))}</strong></article>
+              <article className="stat-card"><p>{t('receivedPurchases')}</p><strong className="stat-value">{receivedPurchaseCount}</strong></article>
             </div>
             <div className="inventory-grid">
               <form className="panel inventory-form" onSubmit={createPurchase}>
@@ -1923,10 +1927,20 @@ function App() {
                   <div><h3>{t('purchaseHistory')}</h3><p>{t('purchaseHistoryDescription')}</p></div>
                   <span className="inventory-count">{filteredPurchases.length}</span>
                 </div>
-                <label className="product-search">
-                  <Search size={17} />
-                  <input value={purchaseSearch} onChange={(event) => setPurchaseSearch(event.target.value)} placeholder={t('searchPurchases')} aria-label={t('searchPurchases')} />
-                </label>
+                <div className="catalog-toolbar">
+                  <label className="product-search">
+                    <Search size={17} />
+                    <input value={purchaseSearch} onChange={(event) => setPurchaseSearch(event.target.value)} placeholder={t('searchPurchases')} aria-label={t('searchPurchases')} />
+                  </label>
+                  <div className="catalog-filters" role="group" aria-label={t('purchaseStatusFilter')}>
+                    <button type="button" className={purchaseStatusFilter === 'all' ? 'catalog-filter is-active' : 'catalog-filter'} aria-pressed={purchaseStatusFilter === 'all'} onClick={() => setPurchaseStatusFilter('all')}>
+                      {t('allPurchases')} <span>{purchases.length}</span>
+                    </button>
+                    <button type="button" className={purchaseStatusFilter === 'received' ? 'catalog-filter is-active' : 'catalog-filter'} aria-pressed={purchaseStatusFilter === 'received'} onClick={() => setPurchaseStatusFilter('received')}>
+                      {t('receivedOnly')} <span>{receivedPurchaseCount}</span>
+                    </button>
+                  </div>
+                </div>
                 <div className="table-scroll"><table><thead><tr><th>{t('purchaseReference')}</th><th>{t('supplierName')}</th><th>{t('amount')}</th><th>{t('status')}</th></tr></thead>
                   <tbody>{filteredPurchases.map((purchase) => (
                     <tr key={purchase.id}><td><strong>{purchase.referenceNumber}</strong></td><td>{purchase.supplierName}</td><td>{formatMoney(purchase.totalMinor)}</td><td><span className={`status-pill ${purchase.status}`}>{t(purchase.status)}</span></td></tr>
