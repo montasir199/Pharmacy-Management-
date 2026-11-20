@@ -190,6 +190,7 @@ describe('main application shell', () => {
 
   it('configures the system currency in Settings and does not offer a currency selector in POS', async () => {
     const user = userEvent.setup()
+    const originalInvoke = invokeMock.getMockImplementation()
     invokeMock.mockImplementation((command: string, args: Record<string, unknown>) => {
       if (command === 'list_currencies') return Promise.resolve([
         { code: 'SAR', name: 'Saudi riyal', symbol: 'SAR', minorUnitExponent: 2 },
@@ -200,7 +201,7 @@ describe('main application shell', () => {
         if (args?.key === 'default_currency_exchange_rate') return Promise.resolve('1')
         return Promise.resolve('')
       }
-      return Promise.resolve([])
+      return originalInvoke?.(command, args)
     })
     render(<App />)
     await user.click(screen.getByRole('button', { name: 'الإعدادات' }))
