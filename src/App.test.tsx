@@ -459,6 +459,11 @@ describe('main application shell', () => {
     await user.type(screen.getByRole('textbox', { name: 'ابحث برقم المرجع أو المورد أو الحالة...' }), 'الشفاء')
     expect(screen.getByText('PO-1002')).toBeInTheDocument()
     expect(screen.queryByText('PO-1001')).not.toBeInTheDocument()
+
+    await user.clear(screen.getByRole('textbox', { name: 'ابحث برقم المرجع أو المورد أو الحالة...' }))
+    await user.click(screen.getByRole('button', { name: /المستلمة فقط/ }))
+    expect(screen.getByText('PO-1001')).toBeInTheDocument()
+    expect(screen.queryByText('PO-1002')).not.toBeInTheDocument()
   })
 
   it('filters sales reports by period and customer without mixing currencies', async () => {
