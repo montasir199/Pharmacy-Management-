@@ -281,6 +281,7 @@ function App() {
   const [autoPrintSaleId, setAutoPrintSaleId] = useState<number | null>(null)
   const [retryPrintJobId, setRetryPrintJobId] = useState<number | null>(null)
   const [globalSearch, setGlobalSearch] = useState('')
+  const [productCatalogFilter, setProductCatalogFilter] = useState<'all' | 'low' | 'expiring'>('all')
   const [productBarcode, setProductBarcode] = useState('')
   const [reorderLevel, setReorderLevel] = useState('0')
   const [sales, setSales] = useState<SaleSummary[]>([])
@@ -331,6 +332,20 @@ function App() {
   const lowStockProducts = products
     .filter((product) => product.availableUnits <= product.reorderLevelUnits)
     .sort((left, right) => left.availableUnits - right.availableUnits)
+
+  const catalogProducts = products.filter((product) => {
+    const query = globalSearch.trim().toLocaleLowerCase()
+    const matchesSearch = !query || [product.nameAr, product.nameEn, product.sku, product.barcode ?? '']
+      .some((value) => value.toLocaleLowerCase().includes(query))
+    if (!matchesSearch) return false
+    if (productCatalogFilter === 'low') return product.availableUnits <= product.reorderLevelUnits
+    if (productCatalogFilter === 'expiring') {
+      if (!product.nearestExpiryDate || product.availableUnits <= 0) return false
+      const days = daysUntilExpiry(product.nearestExpiryDate)
+      return days >= 0 && days <= 90
+    }
+    return true
+  })
   const dailySales = dashboard?.dailySales ?? []
   const chartMax = Math.max(...dailySales.map((day) => day.totalMinor), 0)
   const invoiceCurrencyExponent = currencies.find((currency) => currency.code === saleCurrencyCode)?.minorUnitExponent ?? 2
@@ -1529,36 +1544,95 @@ function App() {
                 {t('addProduct')}
               </button>
             </div>
-            <section className="panel inventory-products">
-              <label className="product-search">
-                <Search size={17} />
-                <input
-                  value={globalSearch}
-                  onChange={(event) => setGlobalSearch(event.target.value)}
-                  placeholder={t('searchProducts')}
-                  aria-label={t('searchProducts')}
-                />
-              </label>
+
+            <div className="stats-grid report-stats catalog-stats">
+              <article className="stat-card">
+                <div className="stat-top"><span className="stat-icon mint"><Package size={19} /></span></div>
+                <p>{t('catalogTotalProducts')}</p>
+                <strong className="stat-value">{products.length}</strong>
+                <span className="stat-note">{t('catalogRegisteredProducts')}</span>
+              </article>
+              <article className="stat-card">
+                <div className="stat-top"><span className="stat-icon blue"><Boxes size={19} /></span></div>
+                <p>{t('availableUnits')}</p>
+                <strong className="stat-value">{products.reduce((sum, product) => sum + product.availableUnits, 0)}</strong>
+                <span className="stat-note">{t('availableBaseUnits')}</span>
+              </article>
+              <article className="stat-card">
+                <div className="stat-top"><span className="stat-icon rose"><Bell size={19} /></span></div>
+                <p>{t('lowStockProducts')}</p>
+                <strong className="stat-value">{lowStockProducts.length}</strong>
+                <span className="stat-note">{t('lowStockNote')}</span>
+              </article>
+              <article className="stat-card">
+                <div className="stat-top"><span className="stat-icon amber"><Activity size={19} /></span></div>
+                <p>{t('expiringSoonHeading')}</p>
+                <strong className="stat-value">{expiringProducts.length}</strong>
+                <span className="stat-note">{t('catalogExpiryWindow')}</span>
+              </article>
+            </div>
+
+            <section className="panel inventory-products catalog-panel">
+              <div className="catalog-toolbar">
+                <label className="product-search">
+                  <Search size={17} />
+                  <input
+                    value={globalSearch}
+                    onChange={(event) => setGlobalSearch(event.target.value)}
+                    placeholder={t('searchProducts')}
+                    aria-label={t('searchProducts')}
+                  />
+                </label>
+                <div className="catalog-filters" role="group" aria-label={t('catalogFilters')}>
+                  <button type="button" className={productCatalogFilter === 'all' ? 'catalog-filter is-active' : 'catalog-filter'} aria-pressed={productCatalogFilter === 'all'} onClick={() => setProductCatalogFilter('all')}>
+                    {t('catalogAll')}
+                    <span>{products.length}</span>
+                  </button>
+                  <button type="button" className={productCatalogFilter === 'low' ? 'catalog-filter is-active' : 'catalog-filter'} aria-pressed={productCatalogFilter === 'low'} onClick={() => setProductCatalogFilter('low')}>
+                    {t('catalogLowStock')}
+                    <span>{lowStockProducts.length}</span>
+                  </button>
+                  <button type="button" className={productCatalogFilter === 'expiring' ? 'catalog-filter is-active' : 'catalog-filter'} aria-pressed={productCatalogFilter === 'expiring'} onClick={() => setProductCatalogFilter('expiring')}>
+                    {t('catalogExpiring')}
+                    <span>{expiringProducts.length}</span>
+                  </button>
+                </div>
+                <span className="catalog-result-count">{t('catalogShowing', { count: catalogProducts.length })}</span>
+              </div>
               <div className="table-scroll">
                 <table>
-                  <thead><tr><th>{t('product')}</th><th>{t('sku')}</th><th>{t('baseUnit')}</th><th>{t('availableUnits')}</th><th>{t('reorderLevel')}</th></tr></thead>
+                  <thead>
+                    <tr>
+                      <th>{t('product')}</th>
+                      <th>{t('sku')}</th>
+                      <th>{t('barcode')}</th>
+                      <th>{t('baseUnit')}</th>
+                      <th>{t('availableUnits')}</th>
+                      <th>{t('reorderLevel')}</th>
+                      <th>{t('nearestExpiry')}</th>
+                      <th>{t('status')}</th>
+                    </tr>
+                  </thead>
                   <tbody>
-                    {products
-                      .filter((product) => {
-                        const query = globalSearch.trim().toLocaleLowerCase()
-                        return !query || [product.nameAr, product.nameEn, product.sku, product.barcode ?? '']
-                          .some((value) => value.toLocaleLowerCase().includes(query))
-                      })
-                      .map((product) => (
+                    {catalogProducts.map((product) => {
+                      const isLow = product.availableUnits <= product.reorderLevelUnits
+                      const expiryDays = product.nearestExpiryDate ? daysUntilExpiry(product.nearestExpiryDate) : Number.POSITIVE_INFINITY
+                      return (
                         <tr key={product.id}>
                           <td><strong>{isArabic ? product.nameAr : product.nameEn}</strong><small>{isArabic ? product.nameEn : product.nameAr}</small></td>
-                          <td>{product.sku}</td>
+                          <td><span className="catalog-code">{product.sku}</span></td>
+                          <td>{product.barcode || '—'}</td>
                           <td>{product.baseUnit}</td>
-                          <td><span className={product.availableUnits <= product.reorderLevelUnits ? 'stock-low' : 'stock-ok'}>{product.availableUnits}</span></td>
+                          <td><strong className={isLow ? 'stock-low' : 'stock-ok'}>{product.availableUnits}</strong></td>
                           <td>{product.reorderLevelUnits}</td>
+                          <td>{product.nearestExpiryDate || '—'}</td>
+                          <td><span className={isLow ? 'catalog-status is-low' : expiryDays <= 90 ? 'catalog-status is-expiring' : 'catalog-status is-ok'}>{isLow ? t('catalogLowStock') : expiryDays <= 90 && expiryDays >= 0 ? t('catalogExpiring') : t('catalogInStock')}</span></td>
                         </tr>
-                      ))}
-                    {products.length === 0 && <tr><td colSpan={6} className="inventory-empty">{t('noProducts')}</td></tr>}
+                      )
+                    })}
+                    {catalogProducts.length === 0 && (
+                      <tr><td colSpan={8} className="inventory-empty">{products.length === 0 ? t('noProducts') : t('catalogNoMatches')}</td></tr>
+                    )}
                   </tbody>
                 </table>
               </div>

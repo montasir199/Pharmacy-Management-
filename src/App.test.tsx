@@ -121,6 +121,34 @@ describe('main application shell', () => {
     expect(screen.queryByText('Paracetamol')).not.toBeInTheDocument()
   })
 
+  it('shows catalog metrics and filters products by low stock and expiry', async () => {
+    const user = userEvent.setup()
+    const originalInvoke = invokeMock.getMockImplementation()
+    const soon = new Date(Date.now() + 20 * 86_400_000).toISOString().slice(0, 10)
+    invokeMock.mockImplementation((command: string, args: Record<string, unknown>) => {
+      if (command === 'list_products') return Promise.resolve([
+        { id: 1, sku: 'MED-100', barcode: '628100', nameAr: 'باراسيتامول', nameEn: 'Paracetamol', baseUnit: 'قرص', reorderLevelUnits: 5, salePriceMinor: 1250, availableUnits: 24, nearestExpiryDate: null },
+        { id: 2, sku: 'MED-200', barcode: '628200', nameAr: 'أموكسيسيلين', nameEn: 'Amoxicillin', baseUnit: 'كبسولة', reorderLevelUnits: 10, salePriceMinor: 2500, availableUnits: 3, nearestExpiryDate: null },
+        { id: 3, sku: 'MED-300', barcode: null, nameAr: 'فيتامين د', nameEn: 'Vitamin D', baseUnit: 'كبسولة', reorderLevelUnits: 2, salePriceMinor: 3000, availableUnits: 8, nearestExpiryDate: soon },
+      ])
+      return originalInvoke?.(command, args)
+    })
+    render(<App />)
+    await user.click(screen.getByRole('button', { name: 'المنتجات' }))
+
+    expect(await screen.findByText('إجمالي الأصناف المسجلة')).toBeInTheDocument()
+    expect(screen.getByText('عرض 3 صنف')).toBeInTheDocument()
+    expect(screen.getByText('628100')).toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: /مخزون منخفض/ }))
+    expect(screen.getByText('Amoxicillin')).toBeInTheDocument()
+    expect(screen.queryByText('Paracetamol')).not.toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: /قريب الانتهاء/ }))
+    expect(screen.getByText('Vitamin D')).toBeInTheDocument()
+    expect(screen.queryByText('Amoxicillin')).not.toBeInTheDocument()
+  })
+
   it('highlights products at or below their reorder threshold', async () => {
     const user = userEvent.setup()
     const originalInvoke = invokeMock.getMockImplementation()
