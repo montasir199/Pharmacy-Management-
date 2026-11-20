@@ -20,6 +20,7 @@ import {
   Landmark,
   LayoutDashboard,
   Menu,
+  Minus,
   Moon,
   Package,
   Plus,
@@ -487,6 +488,10 @@ function App() {
   }, [activePage])
 
   useEffect(() => {
+    if (activePage === 'sales' && !saleReceipt) saleBarcodeRef.current?.focus()
+  }, [activePage, saleReceipt])
+
+  useEffect(() => {
     if (activePage !== 'sales') return
     const handleSaleShortcut = (event: KeyboardEvent) => {
       if (event.key === 'Escape') {
@@ -501,6 +506,9 @@ function App() {
       } else if (event.key === 'F3') {
         event.preventDefault()
         saleCustomerRef.current?.focus()
+      } else if (event.key === 'F6') {
+        event.preventDefault()
+        saleBarcodeRef.current?.focus()
       } else if (event.key === 'F4') {
         event.preventDefault()
         paymentSectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' })
@@ -2298,7 +2306,19 @@ function App() {
                   <section className="panel pos-catalog">
                     <div className="panel-heading">
                       <div><h3>{t('posProducts')}</h3><p>{t('posProductsDescription')}</p></div>
-                      <span className="inventory-count">{products.length}</span>
+                      <div className="catalog-actions">
+                        <span className="inventory-count">{products.length}</span>
+                        <button
+                          className="icon-button catalog-refresh-button"
+                          type="button"
+                          aria-label={t('refresh')}
+                          title={t('refresh')}
+                          onClick={() => void refreshProducts()}
+                          disabled={inventoryLoading}
+                        >
+                          <RefreshCw size={16} className={inventoryLoading ? 'is-spinning' : ''} />
+                        </button>
+                      </div>
                     </div>
                     <label className="product-search sale-search">
                       <Search size={18} />
@@ -2342,6 +2362,7 @@ function App() {
                         }}
                         placeholder={t('scanBarcode')}
                       />
+                      <kbd>F6</kbd>
                     </label>
                     <div className="pos-stock-filters" role="group" aria-label={t('posStockFilters')}>
                       <button type="button" className={saleStockFilter === 'all' ? 'pos-stock-filter is-active' : 'pos-stock-filter'} aria-pressed={saleStockFilter === 'all'} onClick={() => setSaleStockFilter('all')}>
@@ -2476,6 +2497,26 @@ function App() {
                                       if (line.quantity < 1) setSaleCart((current) => current.map((entry) => entry.productId === line.productId ? { ...entry, quantity: 1 } : entry))
                                     }}
                                   />
+                                  <span className="quantity-stepper">
+                                    <button
+                                      className="icon-button"
+                                      type="button"
+                                      aria-label={`${t('decreaseQuantity')} ${isArabic ? product.nameAr : product.nameEn}`}
+                                      disabled={line.quantity <= 1}
+                                      onClick={() => setSaleCart((current) => current.map((entry) => entry.productId === line.productId ? { ...entry, quantity: Math.max(1, entry.quantity - 1) } : entry))}
+                                    >
+                                      <Minus size={13} />
+                                    </button>
+                                    <button
+                                      className="icon-button"
+                                      type="button"
+                                      aria-label={`${t('increaseQuantity')} ${isArabic ? product.nameAr : product.nameEn}`}
+                                      disabled={line.quantity >= product.availableUnits}
+                                      onClick={() => setSaleCart((current) => current.map((entry) => entry.productId === line.productId ? { ...entry, quantity: Math.min(product.availableUnits, entry.quantity + 1) } : entry))}
+                                    >
+                                      <Plus size={13} />
+                                    </button>
+                                  </span>
                                 </td>
                                 <td>{formatInvoiceMoney(product.salePriceMinor)}</td>
                                 <td>

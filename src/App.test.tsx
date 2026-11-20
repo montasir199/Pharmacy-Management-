@@ -428,9 +428,26 @@ describe('main application shell', () => {
     await user.click(screen.getByRole('button', { name: 'المبيعات' }))
 
     const barcode = await screen.findByRole('textbox', { name: 'امسح الباركود أو اكتبه' })
+    expect(barcode).toHaveFocus()
     await user.type(barcode, '628100{Enter}')
 
     expect(await screen.findByLabelText('الكمية بوحدة المنتج باراسيتامول')).toHaveValue(1)
+  })
+
+  it('supports checkout keyboard shortcuts and quick quantity changes', async () => {
+    const user = userEvent.setup()
+    render(<App />)
+    await user.click(screen.getByRole('button', { name: 'المبيعات' }))
+    await user.click(await screen.findByRole('button', { name: /إضافة للفاتورة باراسيتامول/ }))
+
+    const quantity = screen.getByLabelText('الكمية بوحدة المنتج باراسيتامول')
+    await user.click(screen.getByRole('button', { name: 'زيادة الكمية باراسيتامول' }))
+    expect(quantity).toHaveValue(2)
+
+    await user.keyboard('{F2}')
+    expect(screen.getByRole('textbox', { name: 'ابحث عن منتج أو رمز...' })).toHaveFocus()
+    await user.keyboard('{F6}')
+    expect(screen.getByRole('textbox', { name: 'امسح الباركود أو اكتبه' })).toHaveFocus()
   })
 
   it('filters point-of-sale products by stock and searches using Arabic-Indic barcode digits', async () => {
