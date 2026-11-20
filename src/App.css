@@ -2546,3 +2546,87 @@ button:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-vis
 @media (max-width: 1100px) { .sidebar { flex-basis: 238px; width: 238px; } .stats-grid { grid-template-columns: repeat(2,minmax(0,1fr)); } }
 @media (max-width: 760px) { .sidebar { box-shadow: 12px 0 36px rgb(0 0 0 / 20%); } .topbar { min-height: 72px; padding-inline: 16px; } .topbar-title h1 { font-size: 17px; } .page-content { padding: 22px 16px 32px; } .page-heading { align-items: flex-start; } .page-heading h2 { font-size: 19px; } .stats-grid { gap: 10px; } .stat-card { padding: 13px; } }
 @media (prefers-reduced-motion: reduce) { *,*::before,*::after { scroll-behavior: auto !important; animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; } }
+
+
+/* Expiry watchlist: advisory only; dispensing rules remain enforced in SQLite. */
+.expiry-alert-panel {
+  grid-column: 1 / -1;
+  padding: 19px 21px;
+  border-color: color-mix(in srgb, var(--gold) 48%, var(--line));
+  background: linear-gradient(120deg, var(--surface), color-mix(in srgb, var(--gold-soft) 42%, var(--surface)));
+}
+.expiry-alert-panel .panel-heading { margin-bottom: 12px; }
+.expiry-count { color: #7c5c25; background: var(--gold-soft); }
+.expiry-alert-list { display: grid; gap: 8px; }
+.expiry-alert-item {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 16px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface);
+}
+.expiry-product-name { display: grid; gap: 2px; min-width: 0; }
+.expiry-product-name strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.expiry-product-name small { color: var(--subtle); }
+.expiry-date { color: var(--text); font-variant-numeric: tabular-nums; }
+.expiry-days {
+  color: #805f29;
+  background: var(--gold-soft);
+  border-radius: 999px;
+  padding: 5px 10px;
+  font-size: 12px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+.app-shell[data-theme="dark"] .expiry-count,
+.app-shell[data-theme="dark"] .expiry-days { color: #f0d9a5; }
+@media (max-width: 600px) {
+  .expiry-alert-panel { padding: 15px; }
+  .expiry-alert-item { grid-template-columns: minmax(0, 1fr) auto; gap: 7px 10px; }
+  .expiry-product-name { grid-column: 1 / -1; }
+  .expiry-days { justify-self: start; }
+}
+
+
+.low-stock-alert-panel {
+  grid-column: 1 / -1;
+  padding: 19px 21px;
+  border-color: color-mix(in srgb, #b66d5e 38%, var(--line));
+  background: linear-gradient(120deg, var(--surface), color-mix(in srgb, #f7eeeb 44%, var(--surface)));
+}
+.low-stock-alert-panel .panel-heading { margin-bottom: 12px; }
+.low-stock-count { color: #955b4f; background: #f7eeeb; }
+.low-stock-alert-list { display: grid; gap: 8px; }
+.low-stock-alert-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 14px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface);
+}
+.low-stock-quantity {
+  color: #955b4f;
+  background: #f7eeeb;
+  border-radius: 999px;
+  padding: 5px 10px;
+  font-size: 12px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+.app-shell[data-theme="dark"] .low-stock-count,
+.app-shell[data-theme="dark"] .low-stock-quantity { color: #efb6a9; background: #422d2b; }
+@media (max-width: 600px) {
+  .low-stock-alert-panel { padding: 15px; }
+  .low-stock-alert-item { align-items: flex-start; flex-direction: column; gap: 8px; }
+}
+
+
+.product-reorder-editor { display: flex; align-items: center; gap: 8px; min-width: 142px; }
+.product-reorder-editor input { width: 68px; min-width: 0; padding: 7px 8px; text-align: center; font-variant-numeric: tabular-nums; }
+.product-reorder-editor .text-button { white-space: nowrap; }

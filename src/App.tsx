@@ -185,6 +185,18 @@ const emptyPrinter: PrinterConfig = {
   isDefault: false,
 }
 
+function daysUntilExpiry(dateValue: string): number {
+  const [year, month, day] = dateValue.split('-').map(Number)
+  if (!year || !month || !day) return Number.POSITIVE_INFINITY
+  const expiry = new Date(year, month - 1, day)
+  if (expiry.getFullYear() !== year || expiry.getMonth() !== month - 1 || expiry.getDate() !== day) {
+    return Number.POSITIVE_INFINITY
+  }
+  const now = new Date()
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate())
+  return Math.round((expiry.getTime() - today.getTime()) / 86_400_000)
+}
+
 function readTheme(): Theme {
   return localStorage.getItem('pharmacy-theme') === 'dark' ? 'dark' : 'light'
 }
@@ -225,6 +237,7 @@ function App() {
   const [pharmacyLogo, setPharmacyLogo] = useState('')
   const [productSalePrice, setProductSalePrice] = useState('')
   const [productPrices, setProductPrices] = useState<Record<number, string>>({})
+  const [productReorderLevels, setProductReorderLevels] = useState<Record<number, string>>({})
   const [batchNumber, setBatchNumber] = useState('')
   const [batchExpiry, setBatchExpiry] = useState('')
   const [batchUnits, setBatchUnits] = useState('')
@@ -306,6 +319,16 @@ function App() {
     isArabic ? 'ar' : 'en',
     { notation: 'compact', maximumFractionDigits: 1 },
   ).format(minor / 100)
+  const expiringProducts = products
+    .filter((product) => {
+      if (!product.nearestExpiryDate || product.availableUnits <= 0) return false
+      const days = daysUntilExpiry(product.nearestExpiryDate)
+      return days >= 0 && days <= 90
+    })
+    .sort((left, right) => (left.nearestExpiryDate ?? '').localeCompare(right.nearestExpiryDate ?? ''))
+  const lowStockProducts = products
+    .filter((product) => product.availableUnits <= product.reorderLevelUnits)
+    .sort((left, right) => left.availableUnits - right.availableUnits)
   const dailySales = dashboard?.dailySales ?? []
   const chartMax = Math.max(...dailySales.map((day) => day.totalMinor), 0)
   const invoiceCurrencyExponent = currencies.find((currency) => currency.code === saleCurrencyCode)?.minorUnitExponent ?? 2
@@ -1056,6 +1079,21 @@ function App() {
     }
   }
 
+  async function saveProductReorderLevel(productId: number) {
+    const value = Number(productReorderLevels[productId])
+    if (!Number.isSafeInteger(value) || value < 0) {
+      setInventoryError(t('invalidReorderLevel'))
+      return
+    }
+    setInventoryError('')
+    try {
+      await invoke('update_product_reorder_level', { productId, reorderLevelUnits: value })
+      await refreshProducts()
+    } catch (error) {
+      setInventoryError(error instanceof Error ? error.message : String(error))
+    }
+  }
+
   function handleLogoUpload(file?: File) {
     if (!file) return
     if (!['image/png', 'image/jpeg', 'image/webp'].includes(file.type)) {
@@ -1095,6 +1133,9 @@ function App() {
       setProducts(result)
       setProductPrices(Object.fromEntries(
         result.map((product) => [product.id, (product.salePriceMinor / 100).toFixed(2)]),
+      ))
+      setProductReorderLevels(Object.fromEntries(
+        result.map((product) => [product.id, String(product.reorderLevelUnits)]),
       ))
     } catch (error) {
       setInventoryError(error instanceof Error ? error.message : String(error))
@@ -1501,7 +1542,7 @@ function App() {
                           <td>{product.reorderLevelUnits}</td>
                         </tr>
                       ))}
-                    {products.length === 0 && <tr><td colSpan={5} className="inventory-empty">{t('noProducts')}</td></tr>}
+                    {products.length === 0 && <tr><td colSpan={6} className="inventory-empty">{t('noProducts')}</td></tr>}
                   </tbody>
                 </table>
               </div>
@@ -1523,6 +1564,59 @@ function App() {
                 {inventoryLoading ? t('loading') : t('refresh')}
               </button>
             </div>
+
+            {expiringProducts.length > 0 && (
+              <section className="panel expiry-alert-panel" aria-live="polite">
+                <div className="panel-heading">
+                  <div>
+                    <h3>{t('expiringSoonHeading')}</h3>
+                    <p>{t('expiringSoonDescription')}</p>
+                  </div>
+                  <span className="inventory-count expiry-count">{expiringProducts.length}</span>
+                </div>
+                <div className="expiry-alert-list">
+                  {expiringProducts.map((product) => {
+                    const days = daysUntilExpiry(product.nearestExpiryDate ?? '')
+                    return (
+                      <div className="expiry-alert-item" key={product.id}>
+                        <div className="expiry-product-name">
+                          <strong>{isArabic ? product.nameAr : product.nameEn}</strong>
+                          <small>{product.sku}</small>
+                        </div>
+                        <span className="expiry-date">{product.nearestExpiryDate}</span>
+                        <span className="expiry-days">{t('daysRemaining', { count: days })}</span>
+                      </div>
+                    )
+                  })}
+                </div>
+              </section>
+            )}
+
+            {lowStockProducts.length > 0 && (
+              <section className="panel low-stock-alert-panel" aria-live="polite">
+                <div className="panel-heading">
+                  <div>
+                    <h3>{t('lowStockHeading')}</h3>
+                    <p>{t('lowStockDescription')}</p>
+                  </div>
+                  <span className="inventory-count low-stock-count">{lowStockProducts.length}</span>
+                </div>
+                <div className="low-stock-alert-list">
+                  {lowStockProducts.map((product) => (
+                    <div className="low-stock-alert-item" key={product.id}>
+                      <div className="expiry-product-name">
+                        <strong>{isArabic ? product.nameAr : product.nameEn}</strong>
+                        <small>{product.sku}</small>
+                      </div>
+                      <span className="low-stock-quantity">{t('stockQuantitySummary', {
+                        available: product.availableUnits,
+                        reorder: product.reorderLevelUnits,
+                      })}</span>
+                    </div>
+                  ))}
+                </div>
+              </section>
+            )}
 
             <div className="inventory-grid">
               <form className="panel inventory-form" onSubmit={createProduct}>
@@ -1589,6 +1683,7 @@ function App() {
                         <th>{t('baseUnit')}</th>
                         <th>{t('unitPrice')}</th>
                         <th>{t('availableUnits')}</th>
+                        <th>{t('reorderLevel')}</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -1617,6 +1712,19 @@ function App() {
                             </div>
                           </td>
                           <td><span className={product.availableUnits <= product.reorderLevelUnits ? 'stock-low' : 'stock-ok'}>{product.availableUnits}</span></td>
+                          <td>
+                            <div className="product-reorder-editor">
+                              <input
+                                aria-label={`${t('reorderLevel')} ${isArabic ? product.nameAr : product.nameEn}`}
+                                type="number"
+                                min="0"
+                                step="1"
+                                value={productReorderLevels[product.id] ?? String(product.reorderLevelUnits)}
+                                onChange={(event) => setProductReorderLevels((current) => ({ ...current, [product.id]: event.target.value }))}
+                              />
+                              <button className="text-button" type="button" onClick={() => void saveProductReorderLevel(product.id)}>{t('saveReorderLevel')}</button>
+                            </div>
+                          </td>
                         </tr>
                       ))}
                       {products.length === 0 && !inventoryLoading && (

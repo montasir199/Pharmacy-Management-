@@ -128,6 +128,26 @@ pub fn update_product_sale_price(
     Ok(())
 }
 
+pub fn update_product_reorder_level(
+    connection: &Connection,
+    product_id: i64,
+    reorder_level_units: i64,
+) -> Result<(), InventoryError> {
+    if product_id <= 0 || reorder_level_units < 0 {
+        return Err(InventoryError::InvalidProduct);
+    }
+    let updated = connection.execute(
+        "UPDATE products SET reorder_level_units = ?1,
+         updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+         WHERE id = ?2 AND is_enabled = 1",
+        params![reorder_level_units, product_id],
+    )?;
+    if updated == 0 {
+        return Err(InventoryError::InvalidProductId);
+    }
+    Ok(())
+}
+
 pub fn receive_batch(
     connection: &mut Connection,
     product_id: i64,
@@ -437,6 +457,29 @@ mod tests {
         )
         .expect("create product");
         (directory, connection, product_id)
+    }
+
+    #[test]
+    fn updates_reorder_level_and_rejects_invalid_values() {
+        let (_directory, connection, product_id) = setup_inventory();
+
+        update_product_reorder_level(&connection, product_id, 25)
+            .expect("update reorder threshold");
+        let products = list_products(&connection).expect("list updated products");
+        assert_eq!(products[0].reorder_level_units, 25);
+
+        assert!(matches!(
+            update_product_reorder_level(&connection, product_id, -1),
+            Err(InventoryError::InvalidProduct)
+        ));
+        assert!(matches!(
+            update_product_reorder_level(&connection, 0, 5),
+            Err(InventoryError::InvalidProduct)
+        ));
+        assert!(matches!(
+            update_product_reorder_level(&connection, i64::MAX, 5),
+            Err(InventoryError::InvalidProductId)
+        ));
     }
 
     #[test]

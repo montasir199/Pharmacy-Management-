@@ -43,7 +43,7 @@ describe('main application shell', () => {
         reorderLevelUnits: 5,
         salePriceMinor: 1250,
         availableUnits: 24,
-        nearestExpiryDate: '2027-01-01',
+        nearestExpiryDate: new Date(Date.now() + 30 * 86_400_000).toISOString().slice(0, 10),
       }])
       if (command === 'list_currencies') return Promise.resolve([{
         code: 'SAR',
@@ -107,6 +107,7 @@ describe('main application shell', () => {
 
     await user.click(screen.getByRole('button', { name: 'المخزون' }))
     expect(screen.getByRole('heading', { name: 'المخزون', level: 1 })).toBeInTheDocument()
+    expect(await screen.findByText('أدوية تقترب من انتهاء الصلاحية')).toBeInTheDocument()
   })
 
   it('loads the real product catalog and filters it from global search', async () => {
@@ -118,6 +119,31 @@ describe('main application shell', () => {
 
     await user.type(screen.getByRole('textbox', { name: 'ابحث عن دواء أو رمز منتج...' }), 'missing')
     expect(screen.queryByText('Paracetamol')).not.toBeInTheDocument()
+  })
+
+  it('highlights products at or below their reorder threshold', async () => {
+    const user = userEvent.setup()
+    const originalInvoke = invokeMock.getMockImplementation()
+    invokeMock.mockImplementation((command: string, args: Record<string, unknown>) => {
+      if (command === 'list_products') return Promise.resolve([
+        {
+          id: 1, sku: 'MED-100', barcode: '628100', nameAr: 'باراسيتامول', nameEn: 'Paracetamol',
+          baseUnit: 'قرص', reorderLevelUnits: 5, salePriceMinor: 1250, availableUnits: 24,
+          nearestExpiryDate: null,
+        },
+        {
+          id: 2, sku: 'MED-200', barcode: null, nameAr: 'أموكسيسيلين', nameEn: 'Amoxicillin',
+          baseUnit: 'كبسولة', reorderLevelUnits: 10, salePriceMinor: 2500, availableUnits: 3,
+          nearestExpiryDate: null,
+        },
+      ])
+      return originalInvoke?.(command, args)
+    })
+    render(<App />)
+    await user.click(screen.getByRole('button', { name: 'المخزون' }))
+
+    expect(await screen.findByText('أصناف قاربت على النفاد')).toBeInTheDocument()
+    expect(screen.getByText('المتوفر 3 · حد إعادة الطلب 10')).toBeInTheDocument()
   })
 
   it('sends product creation fields using the Tauri command argument names', async () => {
@@ -141,6 +167,24 @@ describe('main application shell', () => {
         reorderLevelUnits: 0,
         salePriceMinor: 1250,
       }))
+    })
+  })
+
+  it('updates the product reorder threshold through the local database command', async () => {
+    const user = userEvent.setup()
+    render(<App />)
+    await user.click(screen.getByRole('button', { name: 'المخزون' }))
+
+    const reorderInput = await screen.findByRole('spinbutton', { name: 'حد إعادة الطلب باراسيتامول' })
+    await user.clear(reorderInput)
+    await user.type(reorderInput, '12')
+    await user.click(screen.getByRole('button', { name: 'حفظ الحد' }))
+
+    await waitFor(() => {
+      expect(invokeMock).toHaveBeenCalledWith('update_product_reorder_level', {
+        productId: 1,
+        reorderLevelUnits: 12,
+      })
     })
   })
 

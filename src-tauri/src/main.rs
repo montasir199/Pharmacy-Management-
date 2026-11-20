@@ -56,6 +56,20 @@ fn update_product_sale_price(
 }
 
 #[tauri::command]
+fn update_product_reorder_level(
+    state: tauri::State<'_, DatabaseState>,
+    product_id: i64,
+    reorder_level_units: i64,
+) -> Result<(), String> {
+    let connection = state
+        .connection
+        .lock()
+        .map_err(|_| "database state is unavailable".to_owned())?;
+    inventory::update_product_reorder_level(&connection, product_id, reorder_level_units)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
 fn receive_batch(
     state: tauri::State<'_, DatabaseState>,
     product_id: i64,
@@ -438,6 +452,7 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             create_product,
             update_product_sale_price,
+            update_product_reorder_level,
             receive_batch,
             dispense_fefo,
             get_batch_balances,
