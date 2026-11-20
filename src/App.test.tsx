@@ -397,6 +397,42 @@ describe('main application shell', () => {
     })
   })
 
+  it('filters the customer directory by name and phone number', async () => {
+    const user = userEvent.setup()
+    const originalInvoke = invokeMock.getMockImplementation()
+    invokeMock.mockImplementation((command: string, args: Record<string, unknown>) => {
+      if (command === 'list_customers') return Promise.resolve([
+        { id: 1, name: 'أحمد محمد', phone: '0501234567' },
+        { id: 2, name: 'سارة علي', phone: '0557654321' },
+      ])
+      return originalInvoke?.(command, args)
+    })
+    render(<App />)
+    await user.click(screen.getByRole('button', { name: 'العملاء' }))
+    expect(await screen.findByText('أحمد محمد')).toBeInTheDocument()
+    await user.type(screen.getByRole('textbox', { name: 'ابحث باسم العميل أو رقم الهاتف...' }), '0557654321')
+    expect(screen.getByText('سارة علي')).toBeInTheDocument()
+    expect(screen.queryByText('أحمد محمد')).not.toBeInTheDocument()
+  })
+
+  it('filters purchase history by supplier or reference', async () => {
+    const user = userEvent.setup()
+    const originalInvoke = invokeMock.getMockImplementation()
+    invokeMock.mockImplementation((command: string, args: Record<string, unknown>) => {
+      if (command === 'list_purchases') return Promise.resolve([
+        { id: 1, referenceNumber: 'PO-1001', supplierName: 'مؤسسة الدواء', totalMinor: 12500, status: 'received', purchasedAt: new Date().toISOString() },
+        { id: 2, referenceNumber: 'PO-1002', supplierName: 'شركة الشفاء', totalMinor: 25000, status: 'ordered', purchasedAt: new Date().toISOString() },
+      ])
+      return originalInvoke?.(command, args)
+    })
+    render(<App />)
+    await user.click(screen.getByRole('button', { name: 'المشتريات' }))
+    expect(await screen.findByText('PO-1001')).toBeInTheDocument()
+    await user.type(screen.getByRole('textbox', { name: 'ابحث برقم المرجع أو المورد أو الحالة...' }), 'الشفاء')
+    expect(screen.getByText('PO-1002')).toBeInTheDocument()
+    expect(screen.queryByText('PO-1001')).not.toBeInTheDocument()
+  })
+
   it('opens every application page without a placeholder screen', async () => {
     const user = userEvent.setup()
     render(<App />)
