@@ -2625,3 +2625,8 @@ button:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-vis
   .low-stock-alert-panel { padding: 15px; }
   .low-stock-alert-item { align-items: flex-start; flex-direction: column; gap: 8px; }
 }
+
+
+.product-reorder-editor { display: flex; align-items: center; gap: 8px; min-width: 142px; }
+.product-reorder-editor input { width: 68px; min-width: 0; padding: 7px 8px; text-align: center; font-variant-numeric: tabular-nums; }
+.product-reorder-editor .text-button { white-space: nowrap; }
