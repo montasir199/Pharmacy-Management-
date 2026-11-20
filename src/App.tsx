@@ -39,21 +39,13 @@ import {
 import Barcode from 'react-barcode'
 import { QRCodeSVG } from 'qrcode.react'
 import { useTranslation } from 'react-i18next'
+import { ProductGrid } from './modules/pos/ProductGrid'
+import { ProductSearch } from './modules/pos/ProductSearch'
+import { normalizeProductSearch } from './modules/pos/search'
+import type { ProductSummary, SaleStockFilter } from './modules/pos/types'
 import './App.css'
 
 type Theme = 'light' | 'dark'
-type ProductSummary = {
-  id: number
-  sku: string
-  barcode: string | null
-  nameAr: string
-  nameEn: string
-  baseUnit: string
-  reorderLevelUnits: number
-  salePriceMinor: number
-  availableUnits: number
-  nearestExpiryDate: string | null
-}
 type BatchBalance = {
   batchId: number
   batchNumber: string
@@ -189,18 +181,6 @@ const emptyPrinter: PrinterConfig = {
   isDefault: false,
 }
 
-function normalizeProductSearch(value: string): string {
-  return value
-    .normalize('NFKC')
-    .toLocaleLowerCase()
-    .replace(/[\u064B-\u065F\u0670\u0640]/g, '')
-    .replace(/[أإآ]/g, 'ا')
-    .replace(/ى/g, 'ي')
-    .replace(/[٠-٩]/g, (digit) => String(digit.charCodeAt(0) - 0x0660))
-    .replace(/[۰-۹]/g, (digit) => String(digit.charCodeAt(0) - 0x06f0))
-    .trim()
-}
-
 function daysUntilExpiry(dateValue: string): number {
   const [year, month, day] = dateValue.split('-').map(Number)
   if (!year || !month || !day) return Number.POSITIVE_INFINITY
@@ -266,7 +246,7 @@ function App() {
   const [saleCustomerId, setSaleCustomerId] = useState('')
   const [saleCart, setSaleCart] = useState<SaleCartLine[]>([])
   const [saleSearch, setSaleSearch] = useState('')
-  const [saleStockFilter, setSaleStockFilter] = useState<'all' | 'available' | 'low' | 'out'>('all')
+  const [saleStockFilter, setSaleStockFilter] = useState<SaleStockFilter>('all')
   const [saleBarcode, setSaleBarcode] = useState('')
   const [currencies, setCurrencies] = useState<CurrencySummary[]>([])
   const [saleCurrencyCode, setSaleCurrencyCode] = useState('SAR')
@@ -2320,107 +2300,30 @@ function App() {
                         </button>
                       </div>
                     </div>
-                    <label className="product-search sale-search">
-                      <Search size={18} />
-                      <input
-                        ref={saleSearchRef}
-                        aria-label={t('searchProducts')}
-                        value={saleSearch}
-                        onChange={(event) => setSaleSearch(event.target.value)}
-                        onKeyDown={(event) => {
-                          if (event.key !== 'Enter') return
-                          event.preventDefault()
-                          const query = normalizeProductSearch(saleSearch)
-                          const exact = products.find((product) =>
-                            normalizeProductSearch(product.barcode ?? '') === query
-                            || normalizeProductSearch(product.sku) === query)
-                          const matches = products.filter((product) =>
-                            [product.nameAr, product.nameEn, product.sku, product.barcode ?? '']
-                              .some((value) => normalizeProductSearch(value).includes(query)))
-                          const selectedProduct = exact ?? (matches.length === 1 ? matches[0] : undefined)
-                          if (selectedProduct) {
-                            addToSaleCart(selectedProduct.id)
-                            setSaleSearch('')
-                          }
-                        }}
-                        placeholder={t('searchProducts')}
-                      />
-                      <kbd>F2</kbd>
-                    </label>
-                    <label className="product-search barcode-search">
-                      <ScanLine size={18} />
-                      <input
-                        ref={saleBarcodeRef}
-                        aria-label={t('scanBarcode')}
-                        value={saleBarcode}
-                        onChange={(event) => setSaleBarcode(event.target.value)}
-                        onKeyDown={(event) => {
-                          if (event.key === 'Enter') {
-                            event.preventDefault()
-                            addScannedBarcode(saleBarcode)
-                          }
-                        }}
-                        placeholder={t('scanBarcode')}
-                      />
-                      <kbd>F6</kbd>
-                    </label>
-                    <div className="pos-stock-filters" role="group" aria-label={t('posStockFilters')}>
-                      <button type="button" className={saleStockFilter === 'all' ? 'pos-stock-filter is-active' : 'pos-stock-filter'} aria-pressed={saleStockFilter === 'all'} onClick={() => setSaleStockFilter('all')}>
-                        {t('posFilterAll')} <span>{products.length}</span>
-                      </button>
-                      <button type="button" className={saleStockFilter === 'available' ? 'pos-stock-filter is-active' : 'pos-stock-filter'} aria-pressed={saleStockFilter === 'available'} onClick={() => setSaleStockFilter('available')}>
-                        {t('posFilterAvailable')} <span>{saleAvailableCount}</span>
-                      </button>
-                      <button type="button" className={saleStockFilter === 'low' ? 'pos-stock-filter is-active' : 'pos-stock-filter'} aria-pressed={saleStockFilter === 'low'} onClick={() => setSaleStockFilter('low')}>
-                        {t('posFilterLowStock')} <span>{saleLowStockCount}</span>
-                      </button>
-                      <button type="button" className={saleStockFilter === 'out' ? 'pos-stock-filter is-active' : 'pos-stock-filter'} aria-pressed={saleStockFilter === 'out'} onClick={() => setSaleStockFilter('out')}>
-                        {t('posFilterOutOfStock')} <span>{saleOutOfStockCount}</span>
-                      </button>
-                      <span className="pos-result-count">{t('posShowingProducts', { count: saleCatalogProducts.length })}</span>
-                    </div>
-                    <div className="pos-product-grid" role="list" aria-label={t('posProducts')}>
-                      {saleCatalogProducts.map((product) => {
-                        const productName = isArabic ? product.nameAr : product.nameEn
-                        const isLowStock = product.availableUnits <= product.reorderLevelUnits
-                        const isOutOfStock = product.availableUnits === 0
-                        return (
-                          <article className="pos-product-card" key={product.id} role="listitem">
-                            <div className="pos-product-card-top">
-                              <div className="pos-product-identity">
-                                <h4>{productName}</h4>
-                                <span>{product.sku}</span>
-                              </div>
-                              <span className={isOutOfStock ? 'pos-stock-state is-out' : isLowStock ? 'pos-stock-state is-low' : 'pos-stock-state is-available'}>
-                                {isOutOfStock ? t('posFilterOutOfStock') : isLowStock ? t('stockLow') : t('posFilterAvailable')}
-                              </span>
-                            </div>
-                            <div className="pos-product-card-price">{formatInvoiceMoney(product.salePriceMinor)}</div>
-                            <div className="pos-product-card-details">
-                              <div><span>{t('barcode')}</span><strong>{product.barcode || '—'}</strong></div>
-                              <div><span>{t('availableUnits')}</span><strong className={isLowStock ? 'stock-low' : 'stock-ok'}>{product.availableUnits}</strong></div>
-                              <div><span>{t('nearestExpiry')}</span><strong>{product.nearestExpiryDate || '—'}</strong></div>
-                            </div>
-                            <button
-                              className="pos-product-add"
-                              type="button"
-                              aria-label={`${t('addToInvoice')} ${productName}`}
-                              onClick={() => addToSaleCart(product.id)}
-                              disabled={isOutOfStock || product.salePriceMinor <= 0}
-                            >
-                              <Plus size={16} />
-                              <span>{t('addToInvoice')}</span>
-                            </button>
-                          </article>
-                        )
-                      })}
-                      {products.length === 0 && !inventoryLoading && (
-                        <div className="pos-catalog-empty">{t('noProducts')}</div>
-                      )}
-                      {products.length > 0 && saleCatalogProducts.length === 0 && (
-                        <div className="pos-catalog-empty">{t('noSearchResults')}</div>
-                      )}
-                    </div>
+                    <ProductSearch
+                      products={products}
+                      search={saleSearch}
+                      barcode={saleBarcode}
+                      searchRef={saleSearchRef}
+                      barcodeRef={saleBarcodeRef}
+                      onSearchChange={setSaleSearch}
+                      onBarcodeChange={setSaleBarcode}
+                      onAddProduct={addToSaleCart}
+                      onScan={addScannedBarcode}
+                    />
+                    <ProductGrid
+                      products={saleCatalogProducts}
+                      totalProducts={products.length}
+                      availableCount={saleAvailableCount}
+                      lowStockCount={saleLowStockCount}
+                      outOfStockCount={saleOutOfStockCount}
+                      filter={saleStockFilter}
+                      inventoryLoading={inventoryLoading}
+                      isArabic={isArabic}
+                      formatPrice={formatInvoiceMoney}
+                      onFilterChange={setSaleStockFilter}
+                      onAddProduct={addToSaleCart}
+                    />
                   </section>
                   <form ref={saleFormRef} className="panel pos-cart" onSubmit={createSale}>
                     <div className="panel-heading pos-invoice-heading">
