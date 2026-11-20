@@ -413,6 +413,36 @@ describe('main application shell', () => {
     expect(await screen.findByLabelText('الكمية بوحدة المنتج باراسيتامول')).toHaveValue(1)
   })
 
+  it('filters point-of-sale products by stock and searches using Arabic-Indic barcode digits', async () => {
+    const user = userEvent.setup()
+    const originalInvoke = invokeMock.getMockImplementation()
+    invokeMock.mockImplementation((command: string, args: Record<string, unknown>) => {
+      if (command === 'list_products') return Promise.resolve([
+        { id: 1, sku: 'MED-100', barcode: '628100', nameAr: 'باراسيتامول', nameEn: 'Paracetamol', baseUnit: 'قرص', reorderLevelUnits: 5, salePriceMinor: 1250, availableUnits: 24, nearestExpiryDate: null },
+        { id: 2, sku: 'MED-200', barcode: '628200', nameAr: 'أموكسيسيلين', nameEn: 'Amoxicillin', baseUnit: 'كبسولة', reorderLevelUnits: 5, salePriceMinor: 2500, availableUnits: 2, nearestExpiryDate: null },
+        { id: 3, sku: 'MED-300', barcode: '628300', nameAr: 'فيتامين د', nameEn: 'Vitamin D', baseUnit: 'كبسولة', reorderLevelUnits: 0, salePriceMinor: 3000, availableUnits: 0, nearestExpiryDate: null },
+      ])
+      return originalInvoke?.(command, args)
+    })
+    render(<App />)
+    await user.click(screen.getByRole('button', { name: 'المبيعات' }))
+
+    const search = await screen.findByRole('textbox', { name: 'ابحث عن منتج أو رمز...' })
+    await user.type(search, '٦٢٨١٠٠')
+    expect(screen.getByText('Paracetamol')).toBeInTheDocument()
+    expect(screen.queryByText('Amoxicillin')).not.toBeInTheDocument()
+
+    await user.clear(search)
+    await user.click(screen.getByRole('button', { name: /مخزون منخفض/ }))
+    expect(screen.getByText('Amoxicillin')).toBeInTheDocument()
+    expect(screen.queryByText('Paracetamol')).not.toBeInTheDocument()
+    expect(screen.queryByText('Vitamin D')).not.toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: /نفد المخزون/ }))
+    expect(screen.getByText('Vitamin D')).toBeInTheDocument()
+    expect(screen.queryByText('Amoxicillin')).not.toBeInTheDocument()
+  })
+
   it('updates line discounts and requires a complete split payment before checkout', async () => {
     const user = userEvent.setup()
     render(<App />)
