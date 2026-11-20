@@ -1419,7 +1419,7 @@ function App() {
                 </button>
                 <button className="dashboard-secondary-button" type="button" onClick={() => setActivePage('inventory')}>
                   <Boxes size={17} />
-                  {t('inventory')}
+                  {t('nav.inventory')}
                 </button>
                 <button className="primary-button" type="button" onClick={() => setActivePage('sales')}>
                   <Plus size={18} />
