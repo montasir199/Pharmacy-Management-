@@ -185,6 +185,18 @@ const emptyPrinter: PrinterConfig = {
   isDefault: false,
 }
 
+function daysUntilExpiry(dateValue: string): number {
+  const [year, month, day] = dateValue.split('-').map(Number)
+  if (!year || !month || !day) return Number.POSITIVE_INFINITY
+  const expiry = new Date(year, month - 1, day)
+  if (expiry.getFullYear() !== year || expiry.getMonth() !== month - 1 || expiry.getDate() !== day) {
+    return Number.POSITIVE_INFINITY
+  }
+  const now = new Date()
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate())
+  return Math.round((expiry.getTime() - today.getTime()) / 86_400_000)
+}
+
 function readTheme(): Theme {
   return localStorage.getItem('pharmacy-theme') === 'dark' ? 'dark' : 'light'
 }
@@ -306,6 +318,13 @@ function App() {
     isArabic ? 'ar' : 'en',
     { notation: 'compact', maximumFractionDigits: 1 },
   ).format(minor / 100)
+  const expiringProducts = products
+    .filter((product) => {
+      if (!product.nearestExpiryDate || product.availableUnits <= 0) return false
+      const days = daysUntilExpiry(product.nearestExpiryDate)
+      return days >= 0 && days <= 90
+    })
+    .sort((left, right) => (left.nearestExpiryDate ?? '').localeCompare(right.nearestExpiryDate ?? ''))
   const dailySales = dashboard?.dailySales ?? []
   const chartMax = Math.max(...dailySales.map((day) => day.totalMinor), 0)
   const invoiceCurrencyExponent = currencies.find((currency) => currency.code === saleCurrencyCode)?.minorUnitExponent ?? 2
@@ -1523,6 +1542,33 @@ function App() {
                 {inventoryLoading ? t('loading') : t('refresh')}
               </button>
             </div>
+
+            {expiringProducts.length > 0 && (
+              <section className="panel expiry-alert-panel" aria-live="polite">
+                <div className="panel-heading">
+                  <div>
+                    <h3>{t('expiringSoonHeading')}</h3>
+                    <p>{t('expiringSoonDescription')}</p>
+                  </div>
+                  <span className="inventory-count expiry-count">{expiringProducts.length}</span>
+                </div>
+                <div className="expiry-alert-list">
+                  {expiringProducts.map((product) => {
+                    const days = daysUntilExpiry(product.nearestExpiryDate ?? '')
+                    return (
+                      <div className="expiry-alert-item" key={product.id}>
+                        <div className="expiry-product-name">
+                          <strong>{isArabic ? product.nameAr : product.nameEn}</strong>
+                          <small>{product.sku}</small>
+                        </div>
+                        <span className="expiry-date">{product.nearestExpiryDate}</span>
+                        <span className="expiry-days">{t('daysRemaining', { count: days })}</span>
+                      </div>
+                    )
+                  })}
+                </div>
+              </section>
+            )}
 
             <div className="inventory-grid">
               <form className="panel inventory-form" onSubmit={createProduct}>
