@@ -43,7 +43,7 @@ describe('main application shell', () => {
         reorderLevelUnits: 5,
         salePriceMinor: 1250,
         availableUnits: 24,
-        nearestExpiryDate: '2027-01-01',
+        nearestExpiryDate: new Date(Date.now() + 30 * 86_400_000).toISOString().slice(0, 10),
       }])
       if (command === 'list_currencies') return Promise.resolve([{
         code: 'SAR',
