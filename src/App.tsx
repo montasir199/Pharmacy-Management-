@@ -1504,7 +1504,7 @@ function App() {
                           <td><span className="invoice-number">#{sale.invoiceNumber}</span></td>
                           <td><span className="customer-cell"><i className="customer-avatar ca-one">{(sale.customerName ?? t('cashCustomer')).charAt(0)}</i>{sale.customerName ?? t('cashCustomer')}</span></td>
                           <td>{new Date(sale.soldAt).toLocaleString(isArabic ? 'ar' : 'en')}</td>
-                          <td className="amount-cell">{formatMoney(sale.totalMinor)}</td>
+                          <td className="amount-cell">{formatInvoiceMoney(sale.totalMinor, sale.currencyCode, sale.exchangeRateScaled)}</td>
                           <td><span className={`status-pill ${sale.status}`}>{t(sale.status)}</span></td>
                         </tr>
                       ))}
