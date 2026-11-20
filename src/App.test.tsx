@@ -6,6 +6,21 @@ import i18n from './i18n'
 
 const invokeMock = vi.hoisted(() => vi.fn())
 const isTauriMock = vi.hoisted(() => vi.fn(() => false))
+const makeDraft = (id: number) => ({
+  id,
+  createdAt: '2026-11-19T15:00:00.000Z',
+  updatedAt: '2026-11-19T15:00:00.000Z',
+  customerId: null,
+  note: '',
+  currencyCode: 'SAR',
+  exchangeRateScaled: 1000000000,
+  paymentMethod: 'cash',
+  cashPaidMinor: 0,
+  cardPaidMinor: 0,
+  bankTransferPaidMinor: 0,
+  items: [],
+})
+let nextDraftId = 2
 vi.mock('@tauri-apps/api/core', () => ({
   invoke: invokeMock,
   isTauri: isTauriMock,
@@ -24,6 +39,7 @@ describe('main application shell', () => {
     await i18n.changeLanguage('ar')
     invokeMock.mockReset()
     isTauriMock.mockReturnValue(false)
+    nextDraftId = 2
     invokeMock.mockImplementation((command: string) => {
       if (command === 'get_dashboard') return Promise.resolve({
         todaySalesMinor: 12500,
@@ -59,7 +75,15 @@ describe('main application shell', () => {
         symbol: 'ر.س',
         minorUnitExponent: 2,
       }])
+      if (command === 'list_pos_drafts') return Promise.resolve([makeDraft(1)])
+      if (command === 'create_pos_draft') return Promise.resolve(makeDraft(nextDraftId++))
+      if (command === 'save_pos_draft') return Promise.resolve()
       if (command === 'create_sale') return Promise.resolve({
+        id: 1,
+        invoiceNumber: 'INV-20261119-000001',
+        totalMinor: 1250,
+      })
+      if (command === 'create_sale_with_units') return Promise.resolve({
         id: 1,
         invoiceNumber: 'INV-20261119-000001',
         totalMinor: 1250,
@@ -355,6 +379,28 @@ describe('main application shell', () => {
     expect(screen.getByText('لا توجد أرصدة موجبة لهذا المنتج.')).toBeInTheDocument()
   })
 
+  it('keeps invoice tabs independent and persists edits to the selected draft', async () => {
+    const user = userEvent.setup()
+    render(<App />)
+    await user.click(screen.getByRole('button', { name: 'المبيعات' }))
+
+    await user.click(await screen.findByRole('button', { name: /إضافة للفاتورة باراسيتامول/ }))
+    await waitFor(() => {
+      expect(invokeMock).toHaveBeenCalledWith('save_pos_draft', expect.objectContaining({
+        draft: expect.objectContaining({
+          id: 1,
+          items: [expect.objectContaining({ productId: 1, soldQuantity: 1 })],
+        }),
+      }))
+    })
+    await user.click(screen.getByRole('button', { name: 'فاتورة جديدة' }))
+    expect(await screen.findByRole('tab', { name: /فاتورة 2/ })).toHaveAttribute('aria-selected', 'true')
+    expect(screen.queryByLabelText('الكمية بوحدة المنتج باراسيتامول')).not.toBeInTheDocument()
+
+    await user.click(screen.getByRole('tab', { name: /فاتورة 1/ }))
+    expect(screen.getByLabelText('الكمية بوحدة المنتج باراسيتامول')).toHaveValue(1)
+  })
+
   it('renders the redesigned point-of-sale workspace overview and live invoice metrics', async () => {
     render(<App />)
     await userEvent.setup().click(screen.getByRole('button', { name: 'المبيعات' }))
@@ -374,9 +420,10 @@ describe('main application shell', () => {
     await user.click(screen.getByRole('button', { name: /إتمام البيع/ }))
 
     await waitFor(() => {
-      expect(invokeMock).toHaveBeenCalledWith('create_sale', {
+      expect(invokeMock).toHaveBeenCalledWith('create_sale_with_units', {
+        draftId: 1,
         customerId: null,
-        items: [{ productId: 1, quantity: 1, discountBasisPoints: 0 }],
+        items: [{ productId: 1, saleUnitId: 1, quantity: 1, discountType: 'percent', discountValue: 0 }],
         status: 'paid',
         payments: [{ method: 'cash', amountMinor: 1250, currencyCode: 'SAR' }],
         currencyCode: 'SAR',
@@ -522,8 +569,15 @@ describe('main application shell', () => {
     await user.click(completeSale)
 
     await waitFor(() => {
-      expect(invokeMock).toHaveBeenCalledWith('create_sale', expect.objectContaining({
-        items: [{ productId: 1, quantity: 2, discountBasisPoints: 1000 }],
+      expect(invokeMock).toHaveBeenCalledWith('create_sale_with_units', expect.objectContaining({
+        draftId: 1,
+        items: [{
+          productId: 1,
+          saleUnitId: 1,
+          quantity: 2,
+          discountType: 'percent',
+          discountValue: 1000,
+        }],
         payments: [
           { method: 'cash', amountMinor: 1000, currencyCode: 'SAR' },
           { method: 'card', amountMinor: 1250, currencyCode: 'SAR' },

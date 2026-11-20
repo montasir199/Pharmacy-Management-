@@ -3022,6 +3022,35 @@ button:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-vis
   align-items: start;
   gap: 18px;
 }
+.pos-invoice-tabs {
+  display: flex;
+  align-items: stretch;
+  gap: 8px;
+  overflow-x: auto;
+  margin-block-end: 14px;
+  padding-block: 2px 5px;
+}
+.pos-invoice-tab,
+.pos-invoice-new {
+  flex: 0 0 auto;
+  min-width: 104px;
+  min-height: 52px;
+  padding: 7px 12px;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 11px;
+  font: inherit;
+  cursor: pointer;
+}
+.pos-invoice-tab { display: grid; justify-items: start; gap: 3px; }
+.pos-invoice-tab small { color: var(--subtle); font-size: 10px; }
+.pos-invoice-tab.is-active {
+  color: var(--green-deep);
+  background: var(--green-soft);
+  border-color: var(--green);
+}
+.pos-invoice-new { min-width: 52px; display: grid; place-items: center; }
 .pos-catalog,
 .pos-cart {
   padding: 19px;

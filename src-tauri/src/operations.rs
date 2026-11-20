@@ -378,6 +378,7 @@ pub fn create_sale(
         payments,
         currency_code,
         exchange_rate_scaled,
+        None,
     )
 }
 
@@ -389,6 +390,7 @@ pub fn create_sale_with_units(
     payments: &[SalePaymentInput],
     currency_code: &str,
     exchange_rate_scaled: i64,
+    draft_id: Option<i64>,
 ) -> Result<CreatedSale, String> {
     if items.is_empty()
         || items.iter().any(|item| {
@@ -409,6 +411,7 @@ pub fn create_sale_with_units(
                 || payment.currency_code != currency_code
         })
         || exchange_rate_scaled <= 0
+        || draft_id.is_some_and(|id| id <= 0)
     {
         return Err("Invalid sale details".to_owned());
     }
@@ -608,6 +611,14 @@ pub fn create_sale_with_units(
                 ],
             )
             .map_err(|error| error.to_string())?;
+    }
+    if let Some(draft_id) = draft_id {
+        let deleted = transaction
+            .execute("DELETE FROM pos_drafts WHERE id = ?1", [draft_id])
+            .map_err(|error| error.to_string())?;
+        if deleted == 0 {
+            return Err("POS draft was not found".to_owned());
+        }
     }
     transaction.commit().map_err(|error| error.to_string())?;
     Ok(CreatedSale {
@@ -1333,6 +1344,7 @@ mod tests {
             "initial-stock",
         )
         .expect("receive package stock");
+        let draft = create_pos_draft(&connection).expect("create checkout draft");
 
         let sale = create_sale_with_units(
             &mut connection,
@@ -1352,6 +1364,7 @@ mod tests {
             }],
             "SAR",
             1_000_000_000,
+            Some(draft.id),
         )
         .expect("record package sale");
 
@@ -1369,6 +1382,7 @@ mod tests {
         assert_eq!(detail.items[0].batches.len(), 1);
         assert_eq!(detail.items[0].batches[0].batch_number, "LOT-PACK");
         assert_eq!(detail.items[0].batches[0].units, 20);
+        assert!(get_pos_draft(&connection, draft.id).is_err());
     }
 
     #[test]

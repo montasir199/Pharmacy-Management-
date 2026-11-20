@@ -383,6 +383,7 @@ fn create_sale(
 #[tauri::command]
 fn create_sale_with_units(
     state: tauri::State<'_, DatabaseState>,
+    draft_id: Option<i64>,
     customer_id: Option<i64>,
     items: Vec<operations::SaleUnitCartItem>,
     status: String,
@@ -402,6 +403,7 @@ fn create_sale_with_units(
         &payments,
         &currency_code,
         exchange_rate_scaled,
+        draft_id,
     )
 }
 

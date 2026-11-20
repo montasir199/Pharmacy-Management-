@@ -41,8 +41,10 @@ import { QRCodeSVG } from 'qrcode.react'
 import { useTranslation } from 'react-i18next'
 import { ProductGrid } from './modules/pos/ProductGrid'
 import { ProductSearch } from './modules/pos/ProductSearch'
+import { InvoiceTabs } from './modules/pos/InvoiceTabs'
 import { normalizeProductSearch } from './modules/pos/search'
-import type { ProductSummary, SaleStockFilter } from './modules/pos/types'
+import { usePosDrafts } from './modules/pos/usePosDrafts'
+import type { PosDraftItem, ProductSummary, SaleStockFilter } from './modules/pos/types'
 import './App.css'
 
 type Theme = 'light' | 'dark'
@@ -87,7 +89,7 @@ type CurrencySummary = {
   symbol: string
   minorUnitExponent: number
 }
-type SaleCartLine = { productId: number; quantity: number; discountBasisPoints: number }
+type SaleCartLine = PosDraftItem & { quantity: number; discountBasisPoints: number }
 type SaleReceipt = {
   id: number
   invoiceNumber: string
@@ -244,23 +246,26 @@ function App() {
   const [batchExpiry, setBatchExpiry] = useState('')
   const [batchUnits, setBatchUnits] = useState('')
   const [batchProductId, setBatchProductId] = useState('')
-  const [saleCustomerId, setSaleCustomerId] = useState('')
-  const [saleCart, setSaleCart] = useState<SaleCartLine[]>([])
+  const {
+    drafts: saleDrafts,
+    activeDraft: activeSaleDraft,
+    activeDraftId,
+    loading: saleDraftsLoading,
+    error: saleDraftError,
+    clearError: clearSaleDraftError,
+    flushActiveDraft: flushSaleDraft,
+    selectDraft: selectSaleDraft,
+    createDraft: createSaleDraft,
+    updateActiveDraft,
+    finishDraft,
+  } = usePosDrafts()
   const [saleSearch, setSaleSearch] = useState('')
   const [saleStockFilter, setSaleStockFilter] = useState<SaleStockFilter>('all')
   const [saleCategory, setSaleCategory] = useState('')
   const [saleBarcode, setSaleBarcode] = useState('')
   const [currencies, setCurrencies] = useState<CurrencySummary[]>([])
-  const [saleCurrencyCode, setSaleCurrencyCode] = useState('SAR')
-
-  const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>('cash')
-  const [paymentAmounts, setPaymentAmounts] = useState<Record<'cash' | 'card' | 'bank_transfer', string>>({
-    cash: '',
-    card: '',
-    bank_transfer: '',
-  })
+  const [defaultCurrencyCode, setDefaultCurrencyCode] = useState('SAR')
   const [saleSubmitting, setSaleSubmitting] = useState(false)
-  const [saleStartedAt, setSaleStartedAt] = useState(() => new Date())
   const [quickCustomerOpen, setQuickCustomerOpen] = useState(false)
   const [quickCustomerName, setQuickCustomerName] = useState('')
   const [quickCustomerPhone, setQuickCustomerPhone] = useState('')
@@ -296,6 +301,25 @@ function App() {
   const retryPrintStartedRef = useRef<number | null>(null)
   const sendReceiptRef = useRef<((saleId: number, printer: PrinterConfig, retryJobId?: number) => Promise<void>) | null>(null)
   const [printerTestTime] = useState(() => new Date())
+  const saleCart: SaleCartLine[] = activeSaleDraft?.items.map((item) => {
+    const product = products.find((entry) => entry.id === item.productId)
+    const baseUnit = product?.saleUnits?.find((unit) => unit.isBaseUnit)
+    return {
+      ...item,
+      saleUnitId: item.saleUnitId ?? baseUnit?.id ?? 0,
+      quantity: item.soldQuantity,
+      discountBasisPoints: item.discountType === 'percent' ? item.discountValue : 0,
+    }
+  }) ?? []
+  const saleCustomerId = activeSaleDraft?.customerId ? String(activeSaleDraft.customerId) : ''
+  const paymentMethod = activeSaleDraft?.paymentMethod ?? 'cash'
+  const saleCurrencyCode = activeSaleDraft?.currencyCode ?? defaultCurrencyCode
+  const saleStartedAt = activeSaleDraft?.createdAt ?? ''
+  const [paymentInputValues, setPaymentInputValues] = useState<Record<number, {
+    cash: string
+    card: string
+    bank_transfer: string
+  }>>({})
   const taxRateBasisPoints = Math.max(0, Math.min(10000, Math.round((Number(pharmacyTaxRate) || 0) * 100)))
   const [availableUpdate, setAvailableUpdate] = useState<{
     version: string
@@ -365,11 +389,72 @@ function App() {
   const chartMax = Math.max(...dailySales.map((day) => day.totalMinor), 0)
   const invoiceCurrencyExponent = currencies.find((currency) => currency.code === saleCurrencyCode)?.minorUnitExponent ?? 2
   const exchangeRateScaled = 1_000_000_000
+  const paymentAmounts = activeSaleDraft
+    ? paymentInputValues[activeSaleDraft.id] ?? {
+      cash: activeSaleDraft.cashPaidMinor ? (activeSaleDraft.cashPaidMinor / (10 ** invoiceCurrencyExponent)).toFixed(invoiceCurrencyExponent) : '',
+      card: activeSaleDraft.cardPaidMinor ? (activeSaleDraft.cardPaidMinor / (10 ** invoiceCurrencyExponent)).toFixed(invoiceCurrencyExponent) : '',
+      bank_transfer: activeSaleDraft.bankTransferPaidMinor ? (activeSaleDraft.bankTransferPaidMinor / (10 ** invoiceCurrencyExponent)).toFixed(invoiceCurrencyExponent) : '',
+    }
+    : { cash: '', card: '', bank_transfer: '' }
+  function setPaymentAmounts(
+    update: typeof paymentAmounts | ((current: typeof paymentAmounts) => typeof paymentAmounts),
+  ) {
+    if (!activeSaleDraft) return
+    const next = typeof update === 'function' ? update(paymentAmounts) : update
+    setPaymentInputValues((current) => ({ ...current, [activeSaleDraft.id]: next }))
+    updateActiveDraft((draft) => ({
+      ...draft,
+      cashPaidMinor: Math.round((Number(next.cash) || 0) * (10 ** invoiceCurrencyExponent)),
+      cardPaidMinor: Math.round((Number(next.card) || 0) * (10 ** invoiceCurrencyExponent)),
+      bankTransferPaidMinor: Math.round((Number(next.bank_transfer) || 0) * (10 ** invoiceCurrencyExponent)),
+    }))
+  }
+  function setPaymentMethod(method: PaymentMethod) {
+    updateActiveDraft((draft) => ({ ...draft, paymentMethod: method }))
+  }
+  function setSaleCustomerId(value: string) {
+    updateActiveDraft((draft) => ({ ...draft, customerId: value ? Number(value) : null }))
+  }
+  function applyDefaultCurrency(currencyCode: string) {
+    setDefaultCurrencyCode(currencyCode)
+    updateActiveDraft((draft) => draft.items.length === 0
+      ? { ...draft, currencyCode }
+      : draft)
+  }
+  function setSaleCart(
+    update: SaleCartLine[] | ((current: SaleCartLine[]) => SaleCartLine[]),
+  ) {
+    updateActiveDraft((draft) => {
+      const current = draft.items.map((item): SaleCartLine => {
+        const product = products.find((entry) => entry.id === item.productId)
+        const baseUnit = product?.saleUnits?.find((unit) => unit.isBaseUnit)
+        return {
+          ...item,
+          saleUnitId: item.saleUnitId ?? baseUnit?.id ?? 0,
+          quantity: item.soldQuantity,
+          discountBasisPoints: item.discountType === 'percent' ? item.discountValue : 0,
+        }
+      })
+      const next = typeof update === 'function' ? update(current) : update
+      return {
+        ...draft,
+        items: next.map((line) => ({
+          productId: line.productId,
+          saleUnitId: line.saleUnitId,
+          soldQuantity: line.quantity,
+          baseUnitsPerUnit: line.baseUnitsPerUnit,
+          unitPriceMinor: line.unitPriceMinor,
+          discountType: line.discountType,
+          discountValue: line.discountType === 'percent' ? line.discountBasisPoints : line.discountValue,
+        })),
+      }
+    })
+  }
   const invoiceAmounts = saleCart.reduce((totals, line) => {
-    const product = products.find((entry) => entry.id === line.productId)
-    if (!product) return totals
-    const lineSubtotal = line.quantity * product.salePriceMinor
-    const lineDiscount = Math.round(lineSubtotal * line.discountBasisPoints / 10000)
+    const lineSubtotal = line.quantity * line.unitPriceMinor
+    const lineDiscount = line.discountType === 'amount'
+      ? Math.min(lineSubtotal, line.discountValue)
+      : Math.round(lineSubtotal * line.discountValue / 10000)
     totals.subtotal += lineSubtotal
     totals.discount += lineDiscount
     return totals
@@ -852,7 +937,7 @@ function App() {
       setPharmacyTaxNumber(values[3])
       setPharmacyLogo(values[4])
       setPharmacyTaxRate(values[5] ? (Number(values[5]) / 100).toString() : '0')
-      setSaleCurrencyCode(values[6] || 'SAR')
+      applyDefaultCurrency(values[6] || 'SAR')
     } catch (error) {
       setInventoryError(error instanceof Error ? error.message : String(error))
     }
@@ -894,7 +979,7 @@ function App() {
       setInventoryError(t('taxRate'))
       return
     }
-    if (!currencies.some((currency) => currency.code === saleCurrencyCode)) {
+    if (!currencies.some((currency) => currency.code === defaultCurrencyCode)) {
       setInventoryError(t('defaultCurrency'))
       return
     }
@@ -907,7 +992,7 @@ function App() {
           pharmacy_tax_number: pharmacyTaxNumber,
           pharmacy_logo: pharmacyLogo,
           tax_rate_basis_points: String(Math.round(taxRate * 100)),
-          default_currency_code: saleCurrencyCode,
+          default_currency_code: defaultCurrencyCode,
         },
       })
     } catch (error) {
@@ -941,7 +1026,7 @@ function App() {
     event.preventDefault()
     if (saleSubmitting) return
     setInventoryError('')
-    if (!saleCart.length) return
+    if (!saleCart.length || !activeSaleDraft) return
     if (paymentTotalMinor < invoiceTotalMinor || invoiceTotalMinor <= 0) {
       setInventoryError(t('paymentRequired'))
       return
@@ -966,12 +1051,16 @@ function App() {
     setSaleSubmitting(true)
     let createdSale: { id: number }
     try {
-      createdSale = await invoke<{ id: number }>('create_sale', {
+      await flushSaleDraft()
+      createdSale = await invoke<{ id: number }>('create_sale_with_units', {
+        draftId: activeSaleDraft.id,
         customerId: saleCustomerId ? Number(saleCustomerId) : null,
-        items: saleCart.map(({ productId, quantity, discountBasisPoints }) => ({
+        items: saleCart.map(({ productId, saleUnitId, quantity, discountType, discountValue }) => ({
           productId,
+          saleUnitId,
           quantity,
-          discountBasisPoints,
+          discountType,
+          discountValue,
         })),
         status: 'paid',
         payments,
@@ -984,15 +1073,16 @@ function App() {
       return
     }
     setSaleReceipt(null)
-    setSaleCart([])
-    setPaymentAmounts({ cash: '', card: '', bank_transfer: '' })
-    setPaymentMethod('cash')
-    setSaleCustomerId('')
+    setPaymentInputValues((current) => {
+      const remaining = { ...current }
+      delete remaining[activeSaleDraft.id]
+      return remaining
+    })
     setQuickCustomerOpen(false)
     setSaleSearch('')
     setSaleBarcode('')
     setSelectedSaleProductId(null)
-    setSaleStartedAt(new Date())
+    await finishDraft(activeSaleDraft.id, defaultCurrencyCode)
     setSaleSubmitting(false)
     await Promise.all([
       refreshDashboard(),
@@ -1075,39 +1165,66 @@ function App() {
   }
 
   function clearSaleInvoice() {
-    setSaleCart([])
-    setSaleCustomerId('')
-    setPaymentAmounts({ cash: '', card: '', bank_transfer: '' })
-    setPaymentMethod('cash')
+    updateActiveDraft((draft) => ({
+      ...draft,
+      items: [],
+      customerId: null,
+      note: '',
+      paymentMethod: 'cash',
+      cashPaidMinor: 0,
+      cardPaidMinor: 0,
+      bankTransferPaidMinor: 0,
+    }))
+    if (activeSaleDraft) {
+      setPaymentInputValues((current) => {
+        const remaining = { ...current }
+        delete remaining[activeSaleDraft.id]
+        return remaining
+      })
+    }
     setSaleReceipt(null)
     setQuickCustomerOpen(false)
     setSaleSearch('')
     setSaleBarcode('')
     setSelectedSaleProductId(null)
-    setSaleStartedAt(new Date())
     setClearInvoiceOpen(false)
   }
 
   function addToSaleCart(productId: number) {
     setSaleReceipt(null)
+    if (!activeSaleDraft) {
+      setInventoryError(t('loading'))
+      return
+    }
     const product = products.find((entry) => entry.id === productId)
     if (!product) return
     if (!product.availableUnits) {
       setInventoryError(t('noStockAvailable'))
       return
     }
-    if (!product.salePriceMinor) {
+    const baseUnit = product.saleUnits?.find((unit) => unit.isBaseUnit)
+    if (!baseUnit || !baseUnit.salePriceMinor) {
       setInventoryError(t('setProductPrice'))
       return
     }
-    const existing = saleCart.find((line) => line.productId === productId)
-    if (existing && existing.quantity >= product.availableUnits) {
+    const existing = saleCart.find((line) => line.productId === productId && line.saleUnitId === baseUnit.id)
+    if (existing && (existing.quantity + 1) * baseUnit.baseUnitsPerUnit > product.availableUnits) {
       setInventoryError(t('noStockAvailable'))
       return
     }
     setSaleCart((current) => existing
-      ? current.map((line) => line.productId === productId ? { ...line, quantity: line.quantity + 1 } : line)
-      : [...current, { productId, quantity: 1, discountBasisPoints: 0 }])
+      ? current.map((line) => line.productId === productId && line.saleUnitId === baseUnit.id ? { ...line, quantity: line.quantity + 1, soldQuantity: line.quantity + 1 } : line)
+      : [...current, {
+        productId,
+        saleUnitId: baseUnit.id,
+        quantity: 1,
+        soldQuantity: 1,
+        baseUnitsPerUnit: baseUnit.baseUnitsPerUnit,
+        unitPriceMinor: baseUnit.salePriceMinor,
+        discountType: 'percent',
+        discountValue: 0,
+        discountBasisPoints: 0,
+      }])
   }
 
   async function saveProductPrice(productId: number) {
@@ -1256,7 +1373,7 @@ function App() {
   if (reportPeriod === '7d') reportStartDate.setDate(reportStartDate.getDate() - 6)
   if (reportPeriod === '30d') reportStartDate.setDate(reportStartDate.getDate() - 29)
   const filteredReportSales = sales.filter((sale) => {
-    if (sale.currencyCode !== saleCurrencyCode) return false
+    if (sale.currencyCode !== defaultCurrencyCode) return false
     if (reportPeriod !== 'all' && new Date(sale.soldAt).getTime() < reportStartDate.getTime()) return false
     const query = reportSearch.trim().toLocaleLowerCase()
     return !query || [sale.invoiceNumber, sale.customerName ?? ''].some((value) => value.toLocaleLowerCase().includes(query))
@@ -1428,10 +1545,13 @@ function App() {
             </button>
           </div>
         </header>
-        {inventoryError && (
+        {(inventoryError || saleDraftError) && (
           <div className="page-content page-error" role="alert">
-            <span>{inventoryError}</span>
-            <button type="button" className="text-button" onClick={() => setInventoryError('')}>{t('dismiss')}</button>
+            <span>{inventoryError || saleDraftError}</span>
+            <button type="button" className="text-button" onClick={() => {
+              setInventoryError('')
+              clearSaleDraftError()
+            }}>{t('dismiss')}</button>
           </div>
         )}
 
@@ -2092,9 +2212,9 @@ function App() {
                 <label>
                   <span>{t('defaultCurrency')}</span>
                   <select
-                    value={saleCurrencyCode}
+                    value={defaultCurrencyCode}
                     onChange={(event) => {
-                      setSaleCurrencyCode(event.target.value)
+                      applyDefaultCurrency(event.target.value)
                     }}
                   >
                     {currencies.map((currency) => (
@@ -2275,7 +2395,7 @@ function App() {
                     <Search size={17} />
                     <input aria-label={t('searchInvoices')} value={reportSearch} onChange={(event) => setReportSearch(event.target.value)} placeholder={t('searchInvoices')} />
                   </label>
-                  <span className="report-currency-note">{t('reportCurrencyNote', { currency: saleCurrencyCode })}</span>
+                  <span className="report-currency-note">{t('reportCurrencyNote', { currency: defaultCurrencyCode })}</span>
                 </div>
                 <div className="stats-grid report-stats">
                   <article className="stat-card"><p>{t('paidSalesTotal')}</p><strong className="stat-value">{formatMoney(paidReportTotal)}</strong><span className="stat-note">{t('selectedPeriod')}</span></article>
@@ -2299,6 +2419,12 @@ function App() {
                     <div className="pos-overview-metric pos-overview-total"><span>{t('posCurrentTotal')}</span><strong>{formatInvoiceMoney(invoiceTotalMinor)}</strong></div>
                   </div>
                 </section>
+                <InvoiceTabs
+                  drafts={saleDrafts}
+                  activeDraftId={activeDraftId}
+                  onSelect={selectSaleDraft}
+                  onCreate={() => void createSaleDraft(defaultCurrencyCode)}
+                />
                 <div className="pos-layout">
                   <section className="panel pos-catalog">
                     <div className="panel-heading">
@@ -2337,7 +2463,7 @@ function App() {
                       categories={saleCategories}
                       category={saleCategory}
                       filter={saleStockFilter}
-                      inventoryLoading={inventoryLoading}
+                      inventoryLoading={inventoryLoading || saleDraftsLoading}
                       isArabic={isArabic}
                       formatPrice={formatInvoiceMoney}
                       onFilterChange={setSaleStockFilter}
@@ -2355,7 +2481,7 @@ function App() {
                     </div>
                     <div className="invoice-meta">
                       <div><span>{t('invoice')}</span><strong>—</strong></div>
-                      <div><span>{t('invoiceTime')}</span><strong>{saleStartedAt.toLocaleString(isArabic ? 'ar' : 'en')}</strong></div>
+                      <div><span>{t('invoiceTime')}</span><strong>{saleStartedAt ? saleStartedAt.slice(0, 16).replace('T', ' ') : '—'}</strong></div>
                     </div>
                     <div className="customer-picker">
                       <label>

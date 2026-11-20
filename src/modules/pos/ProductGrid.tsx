@@ -102,7 +102,7 @@ export function ProductGrid({
                 className="pos-product-card-main"
                 type="button"
                 onClick={() => onAddProduct(product.id)}
-                disabled={isOutOfStock || salePrice <= 0}
+                disabled={inventoryLoading || isOutOfStock || salePrice <= 0}
                 aria-label={productName}
               >
                 <div className="pos-product-card-top">
@@ -136,7 +136,7 @@ export function ProductGrid({
                 type="button"
                 aria-label={`${t('addToInvoice')} ${productName}`}
                 onClick={() => onAddProduct(product.id)}
-                disabled={isOutOfStock || salePrice <= 0}
+                disabled={inventoryLoading || isOutOfStock || salePrice <= 0}
               >
                 <Plus size={16} />
                 <span>{t('addToInvoice')}</span>
