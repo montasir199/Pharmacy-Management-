@@ -121,6 +121,31 @@ describe('main application shell', () => {
     expect(screen.queryByText('Paracetamol')).not.toBeInTheDocument()
   })
 
+  it('highlights products at or below their reorder threshold', async () => {
+    const user = userEvent.setup()
+    const originalInvoke = invokeMock.getMockImplementation()
+    invokeMock.mockImplementation((command: string, args: Record<string, unknown>) => {
+      if (command === 'list_products') return Promise.resolve([
+        {
+          id: 1, sku: 'MED-100', barcode: '628100', nameAr: 'باراسيتامول', nameEn: 'Paracetamol',
+          baseUnit: 'قرص', reorderLevelUnits: 5, salePriceMinor: 1250, availableUnits: 24,
+          nearestExpiryDate: null,
+        },
+        {
+          id: 2, sku: 'MED-200', barcode: null, nameAr: 'أموكسيسيلين', nameEn: 'Amoxicillin',
+          baseUnit: 'كبسولة', reorderLevelUnits: 10, salePriceMinor: 2500, availableUnits: 3,
+          nearestExpiryDate: null,
+        },
+      ])
+      return originalInvoke?.(command, args)
+    })
+    render(<App />)
+    await user.click(screen.getByRole('button', { name: 'المخزون' }))
+
+    expect(await screen.findByText('أصناف قاربت على النفاد')).toBeInTheDocument()
+    expect(screen.getByText('المتوفر 3 · حد إعادة الطلب 10')).toBeInTheDocument()
+  })
+
   it('sends product creation fields using the Tauri command argument names', async () => {
     const user = userEvent.setup()
     render(<App />)
