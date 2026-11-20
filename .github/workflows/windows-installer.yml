@@ -88,28 +88,47 @@ jobs:
           if (-not $installer) {
             throw "No NSIS installer was produced in $bundleDir"
           }
-          $signaturePath = "$($installer.FullName).sig"
-          if (-not (Test-Path -Path $signaturePath -PathType Leaf)) {
-            throw "Updater signature was not produced: $signaturePath"
+
+          # Tauri's Windows updater requires the signed NSIS updater archive,
+          # not the standalone .exe installer used for manual installation.
+          $updaterBundle = Get-ChildItem -Path $bundleDir -Filter "*.nsis.zip" -File | Select-Object -First 1
+          if (-not $updaterBundle) {
+            throw "Tauri NSIS updater archive (*.nsis.zip) was not produced in $bundleDir"
           }
-          $signature = Get-Content $signaturePath -Raw
+          $signaturePath = "$($updaterBundle.FullName).sig"
+          if (-not (Test-Path -Path $signaturePath -PathType Leaf)) {
+            throw "Updater archive signature was not produced: $signaturePath"
+          }
+          $signature = (Get-Content $signaturePath -Raw).Trim()
+          if ([string]::IsNullOrWhiteSpace($signature)) {
+            throw "Updater archive signature is empty"
+          }
+
           $manifest = @{
             version = $version
             notes = "Update available for Dawai Pharmacy"
             pub_date = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
             platforms = @{
               "windows-x86_64" = @{
-                signature = $signature.Trim()
-                url = "https://github.com/montasir199/Pharmacy-Management-/releases/download/$tag/$($installer.Name)"
+                signature = $signature
+                url = "https://github.com/montasir199/Pharmacy-Management-/releases/download/$tag/$($updaterBundle.Name)"
               }
             }
           } | ConvertTo-Json -Depth 5
           Set-Content -Path "$bundleDir/latest.json" -Value $manifest -Encoding utf8
+
+          $manifestCheck = Get-Content "$bundleDir/latest.json" -Raw | ConvertFrom-Json
+          if ($manifestCheck.version -ne $version -or
+              -not $manifestCheck.platforms.'windows-x86_64'.url.EndsWith(".nsis.zip") -or
+              [string]::IsNullOrWhiteSpace($manifestCheck.platforms.'windows-x86_64'.signature)) {
+            throw "Generated updater manifest failed validation"
+          }
+
           gh release view $tag *> $null
           if ($LASTEXITCODE -eq 0) {
             gh release edit $tag `
               --title "Dawai Pharmacy $version" `
-              --notes "Signed Windows installer for Dawai Pharmacy $version"
+              --notes "Signed Windows installer and updater archive for Dawai Pharmacy $version"
             if ($LASTEXITCODE -ne 0) {
               throw "Could not update the existing GitHub release $tag"
             }
@@ -117,14 +136,15 @@ jobs:
             gh release create $tag `
               --target "${{ github.sha }}" `
               --title "Dawai Pharmacy $version" `
-              --notes "Signed Windows installer for Dawai Pharmacy $version"
+              --notes "Signed Windows installer and updater archive for Dawai Pharmacy $version"
             if ($LASTEXITCODE -ne 0) {
               throw "Could not create GitHub release $tag"
             }
           }
-          gh release upload $tag "$($installer.FullName)" "$bundleDir/latest.json" --clobber
+
+          gh release upload $tag "$($installer.FullName)" "$($updaterBundle.FullName)" "$signaturePath" "$bundleDir/latest.json" --clobber
           if ($LASTEXITCODE -ne 0) {
-            throw "Could not upload the signed installer and update manifest to $tag"
+            throw "Could not upload the installer, signed updater archive, and manifest to $tag"
           }
 
       - name: Upload Windows installer
