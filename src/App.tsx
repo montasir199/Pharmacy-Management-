@@ -2272,20 +2272,12 @@ function App() {
                           <strong>{saleCurrencyCode} · {new Intl.DisplayNames([isArabic ? 'ar' : 'en'], { type: 'currency' }).of(saleCurrencyCode) ?? saleCurrencyCode}</strong>
                           <small>{t('currencyManagedInSettings')}</small>
                         </div>
-                        <label>
+                        <div className="active-currency-display">
                           <span>{t('exchangeRate')}</span>
-                          <input
-                            type="number"
-                            min={saleCurrencyCode === 'SAR' ? '1' : '0.000000001'}
-                            step="any"
-                            value={exchangeRate}
-                            onChange={(event) => setExchangeRate(event.target.value)}
-                            disabled={saleCurrencyCode === 'SAR'}
-                            aria-describedby="exchange-rate-help"
-                          />
-                          {saleCurrencyCode !== 'SAR' && <small id="exchange-rate-help">{t('exchangeRateHelp')}</small>}
+                          <strong>{saleCurrencyCode === 'SAR' ? '1' : exchangeRate || '—'}</strong>
+                          <small>{t('currencyManagedInSettings')}</small>
                           {saleCurrencyCode !== 'SAR' && !isExchangeRateValid && <small className="stock-warning">{t('exchangeRateRequired')}</small>}
-                        </label>
+                        </div>
                       </div>
                       <div className="payment-methods">
                         {(['cash', 'card', 'bank_transfer', 'mixed'] as PaymentMethod[]).map((method) => {
