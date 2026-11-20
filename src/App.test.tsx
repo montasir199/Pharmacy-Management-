@@ -297,6 +297,8 @@ describe('main application shell', () => {
     }))
     await user.click(screen.getByRole('button', { name: 'المبيعات' }))
     expect(screen.queryByRole('combobox', { name: 'العملة' })).not.toBeInTheDocument()
+    await user.click(await screen.findByRole('button', { name: /إضافة للفاتورة باراسيتامول/ }))
+    await user.click(screen.getByRole('button', { name: /عملية الدفع/ }))
     expect(screen.getByText(/USD/)).toBeInTheDocument()
   })
 
@@ -393,7 +395,16 @@ describe('main application shell', () => {
         }),
       }))
     })
-    await user.click(screen.getByRole('button', { name: 'فاتورة جديدة' }))
+    await user.click(screen.getByRole('button', { name: 'خيارات الفاتورة' }))
+    await user.click(screen.getByRole('button', { name: 'ملاحظة الفاتورة' }))
+    await user.type(screen.getByLabelText('ملاحظة الفاتورة'), 'اتصال بالعميل')
+    await waitFor(() => {
+      expect(invokeMock).toHaveBeenCalledWith('save_pos_draft', expect.objectContaining({
+        draft: expect.objectContaining({ id: 1, note: 'اتصال بالعميل' }),
+      }))
+    })
+    await user.click(screen.getByRole('button', { name: 'خيارات الفاتورة' }))
+    await user.click(screen.getByRole('button', { name: 'تعليق الفاتورة وبدء جديدة' }))
     expect(await screen.findByRole('tab', { name: /فاتورة 2/ })).toHaveAttribute('aria-selected', 'true')
     expect(screen.queryByLabelText('الكمية بوحدة المنتج باراسيتامول')).not.toBeInTheDocument()
 
@@ -417,6 +428,7 @@ describe('main application shell', () => {
     await user.click(screen.getByRole('button', { name: 'المبيعات' }))
 
     await user.click(await screen.findByRole('button', { name: /إضافة للفاتورة باراسيتامول/ }))
+    await user.click(screen.getByRole('button', { name: /عملية الدفع/ }))
     await user.click(screen.getByRole('button', { name: /إتمام البيع/ }))
 
     await waitFor(() => {
@@ -433,7 +445,7 @@ describe('main application shell', () => {
     expect(await screen.findByText('INV-20261119-000001')).toBeInTheDocument()
     expect(screen.getByRole('button', { name: /طباعة الفاتورة/ })).toBeInTheDocument()
     expect(screen.getByText('شكرًا لزيارتكم')).toBeInTheDocument()
-    expect(screen.getByText('المبلغ المدفوع')).toBeInTheDocument()
+    expect(screen.getByText(/المبلغ المدفوع/)).toBeInTheDocument()
     expect(document.querySelector('.receipt-code-row svg')).toBeInTheDocument()
   })
 
@@ -475,6 +487,7 @@ describe('main application shell', () => {
     render(<App />)
     await user.click(screen.getByRole('button', { name: 'المبيعات' }))
     await user.click(await screen.findByRole('button', { name: /إضافة للفاتورة باراسيتامول/ }))
+    await user.click(screen.getByRole('button', { name: /عملية الدفع/ }))
     await user.click(screen.getByRole('button', { name: /إتمام البيع/ }))
     await screen.findByText('INV-20261119-000001')
     await user.click(screen.getByRole('button', { name: /طباعة الفاتورة/ }))
@@ -516,6 +529,17 @@ describe('main application shell', () => {
     expect(screen.getByRole('textbox', { name: 'ابحث عن منتج أو رمز...' })).toHaveFocus()
     await user.keyboard('{F6}')
     expect(screen.getByRole('textbox', { name: 'امسح الباركود أو اكتبه' })).toHaveFocus()
+    await user.click(screen.getByRole('tab', { name: /فاتورة 1/ }))
+    await user.keyboard('+')
+    expect(quantity).toHaveValue(3)
+    await user.keyboard('-')
+    expect(quantity).toHaveValue(2)
+    await user.keyboard('{F4}')
+    expect(screen.getByRole('dialog', { name: 'طرق الدفع' })).toBeInTheDocument()
+    await user.keyboard('{Escape}')
+    expect(screen.queryByRole('dialog', { name: 'طرق الدفع' })).not.toBeInTheDocument()
+    await user.keyboard('{Control>}n{/Control}')
+    expect(await screen.findByRole('tab', { name: /فاتورة 2/ })).toHaveAttribute('aria-selected', 'true')
   })
 
   it('filters point-of-sale products by stock and searches using Arabic-Indic barcode digits', async () => {
@@ -558,6 +582,7 @@ describe('main application shell', () => {
     await user.type(screen.getByLabelText('الكمية بوحدة المنتج باراسيتامول'), '2')
     await user.clear(screen.getByLabelText('خصم % باراسيتامول'))
     await user.type(screen.getByLabelText('خصم % باراسيتامول'), '10')
+    await user.click(screen.getByRole('button', { name: /عملية الدفع/ }))
     await user.click(screen.getByRole('button', { name: 'دفع مختلط' }))
 
     const completeSale = screen.getByRole('button', { name: /إتمام البيع/ })
@@ -565,6 +590,8 @@ describe('main application shell', () => {
 
     await user.type(screen.getByLabelText('نقدًا'), '10')
     await user.type(screen.getByLabelText('بطاقة'), '12.5')
+    expect(screen.getByLabelText('نقدًا')).toHaveValue(10)
+    expect(screen.getByLabelText('بطاقة')).toHaveValue(12.5)
     expect(completeSale).toBeEnabled()
     await user.click(completeSale)
 

@@ -14,13 +14,10 @@ import {
   CircleHelp,
   ClipboardList,
   CreditCard,
-  DollarSign,
   Eye,
   Globe2,
-  Landmark,
   LayoutDashboard,
   Menu,
-  Minus,
   Moon,
   Package,
   Plus,
@@ -29,11 +26,8 @@ import {
   Search,
   Settings,
   ShoppingCart,
-  ScanLine,
   Sun,
-  Trash2,
   Users,
-  UserRoundPlus,
   X,
 } from 'lucide-react'
 import Barcode from 'react-barcode'
@@ -42,9 +36,13 @@ import { useTranslation } from 'react-i18next'
 import { ProductGrid } from './modules/pos/ProductGrid'
 import { ProductSearch } from './modules/pos/ProductSearch'
 import { InvoiceTabs } from './modules/pos/InvoiceTabs'
+import { InvoiceItems } from './modules/pos/InvoiceItems'
+import { InvoicePanel } from './modules/pos/InvoicePanel'
+import { PaymentDialog } from './modules/pos/PaymentDialog'
 import { normalizeProductSearch } from './modules/pos/search'
 import { usePosDrafts } from './modules/pos/usePosDrafts'
 import type { PosDraftItem, ProductSummary, SaleStockFilter } from './modules/pos/types'
+import type { PaymentAmounts, PaymentMethod } from './modules/pos/PaymentDialog'
 import './App.css'
 
 type Theme = 'light' | 'dark'
@@ -143,7 +141,6 @@ type PrintJob = {
   lastError: string | null
   createdAt: string
 }
-type PaymentMethod = 'cash' | 'card' | 'bank_transfer' | 'mixed'
 type NavigationKey =
   | 'dashboard'
   | 'sales'
@@ -209,6 +206,7 @@ function App() {
     productId: string
     balances: BatchBalance[]
   } | null>(null)
+  const [batchBalancesByProduct, setBatchBalancesByProduct] = useState<Record<number, BatchBalance[]>>({})
   const [batchInfoProductId, setBatchInfoProductId] = useState<number | null>(null)
   const [inventoryError, setInventoryError] = useState('')
   const [inventoryLoading, setInventoryLoading] = useState(false)
@@ -266,6 +264,7 @@ function App() {
   const [currencies, setCurrencies] = useState<CurrencySummary[]>([])
   const [defaultCurrencyCode, setDefaultCurrencyCode] = useState('SAR')
   const [saleSubmitting, setSaleSubmitting] = useState(false)
+  const [paymentDialogOpen, setPaymentDialogOpen] = useState(false)
   const [quickCustomerOpen, setQuickCustomerOpen] = useState(false)
   const [quickCustomerName, setQuickCustomerName] = useState('')
   const [quickCustomerPhone, setQuickCustomerPhone] = useState('')
@@ -292,8 +291,11 @@ function App() {
   const saleSearchRef = useRef<HTMLInputElement>(null)
   const saleBarcodeRef = useRef<HTMLInputElement>(null)
   const saleCustomerRef = useRef<HTMLSelectElement>(null)
-  const paymentSectionRef = useRef<HTMLDivElement>(null)
-  const saleFormRef = useRef<HTMLFormElement>(null)
+  const saleShortcutActionsRef = useRef<{
+    startNewDraft: () => void
+    updateQuantity: (productId: number, quantity: number) => void
+    cart: SaleCartLine[]
+  }>({ startNewDraft: () => {}, updateQuantity: () => {}, cart: [] })
   const quickCustomerInputRef = useRef<HTMLInputElement>(null)
   const receiptRef = useRef<HTMLDivElement>(null)
   const testReceiptRef = useRef<HTMLDivElement>(null)
@@ -397,7 +399,7 @@ function App() {
     }
     : { cash: '', card: '', bank_transfer: '' }
   function setPaymentAmounts(
-    update: typeof paymentAmounts | ((current: typeof paymentAmounts) => typeof paymentAmounts),
+    update: PaymentAmounts | ((current: PaymentAmounts) => PaymentAmounts),
   ) {
     if (!activeSaleDraft) return
     const next = typeof update === 'function' ? update(paymentAmounts) : update
@@ -411,6 +413,18 @@ function App() {
   }
   function setPaymentMethod(method: PaymentMethod) {
     updateActiveDraft((draft) => ({ ...draft, paymentMethod: method }))
+  }
+  async function startNewSaleDraft() {
+    try {
+      if (activeSaleDraft) await flushSaleDraft()
+      await createSaleDraft(defaultCurrencyCode)
+    } catch (error) {
+      setInventoryError(error instanceof Error ? error.message : String(error))
+    }
+  }
+  async function holdSaleInvoice() {
+    if (!saleCart.length) return
+    await startNewSaleDraft()
   }
   function setSaleCustomerId(value: string) {
     updateActiveDraft((draft) => ({ ...draft, customerId: value ? Number(value) : null }))
@@ -564,13 +578,24 @@ function App() {
   useEffect(() => {
     if (activePage !== 'sales') return
     const handleSaleShortcut = (event: KeyboardEvent) => {
+      if (event.defaultPrevented) return
+      const isFormControl = event.target instanceof HTMLInputElement
+        || event.target instanceof HTMLTextAreaElement
+        || event.target instanceof HTMLSelectElement
       if (event.key === 'Escape') {
+        if (paymentDialogOpen) {
+          setPaymentDialogOpen(false)
+          return
+        }
         setClearInvoiceOpen(false)
         setRemoveProductId(null)
         setQuickCustomerOpen(false)
         return
       }
-      if (event.key === 'F2') {
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'n') {
+        event.preventDefault()
+        saleShortcutActionsRef.current.startNewDraft()
+      } else if (event.key === 'F2') {
         event.preventDefault()
         saleSearchRef.current?.focus()
       } else if (event.key === 'F3') {
@@ -581,20 +606,29 @@ function App() {
         saleBarcodeRef.current?.focus()
       } else if (event.key === 'F4') {
         event.preventDefault()
-        paymentSectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' })
-        paymentSectionRef.current?.querySelector<HTMLInputElement>('[data-payment-field]')?.focus()
+        setPaymentDialogOpen(true)
       } else if (event.key === 'F8') {
         event.preventDefault()
-        saleFormRef.current?.requestSubmit()
+        if (!paymentDialogOpen) setPaymentDialogOpen(true)
       } else if (event.key === 'Delete' && selectedSaleProductId !== null) {
-        if (event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement) return
+        if (paymentDialogOpen || isFormControl) return
         event.preventDefault()
         setRemoveProductId(selectedSaleProductId)
+      } else if ((event.key === '+' || event.key === '-') && selectedSaleProductId !== null) {
+        if (paymentDialogOpen || isFormControl) return
+        const { cart, updateQuantity } = saleShortcutActionsRef.current
+        const selectedLine = cart.find((line) => line.productId === selectedSaleProductId)
+        if (!selectedLine) return
+        event.preventDefault()
+        updateQuantity(
+          selectedLine.productId,
+          event.key === '+' ? selectedLine.quantity + 1 : Math.max(1, selectedLine.quantity - 1),
+        )
       }
     }
     window.addEventListener('keydown', handleSaleShortcut)
     return () => window.removeEventListener('keydown', handleSaleShortcut)
-  }, [activePage, selectedSaleProductId])
+  }, [activePage, paymentDialogOpen, selectedSaleProductId])
 
   useEffect(() => {
     if (activePage === 'dashboard') { void refreshDashboard(); void refreshProducts() }
@@ -910,16 +944,25 @@ function App() {
         productId: Number(batchProductId),
       })
       setBatchBalanceResult({ productId: batchProductId, balances })
+      setBatchBalancesByProduct((current) => ({ ...current, [Number(batchProductId)]: balances }))
     } catch (error) {
       setInventoryError(error instanceof Error ? error.message : String(error))
     }
+  }
+
+  async function loadProductBatches(productId: number) {
+    const cached = batchBalancesByProduct[productId]
+    if (cached) return cached
+    const balances = await invoke<BatchBalance[]>('get_batch_balances', { productId })
+    setBatchBalancesByProduct((current) => ({ ...current, [productId]: balances }))
+    return balances
   }
 
   async function showProductBatches(productId: number) {
     setInventoryError('')
     setBatchInfoProductId(productId)
     try {
-      const balances = await invoke<BatchBalance[]>('get_batch_balances', { productId })
+      const balances = await loadProductBatches(productId)
       setBatchBalanceResult({ productId: String(productId), balances })
     } catch (error) {
       setBatchInfoProductId(null)
@@ -1022,11 +1065,17 @@ function App() {
     }
   }
 
-  const createSale = async (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault()
+  const createSale = async () => {
     if (saleSubmitting) return
     setInventoryError('')
     if (!saleCart.length || !activeSaleDraft) return
+    if (saleCart.some((line) => {
+      const product = products.find((entry) => entry.id === line.productId)
+      return !product || line.quantity < 1 || line.quantity * line.baseUnitsPerUnit > product.availableUnits
+    })) {
+      setInventoryError(t('noStockAvailable'))
+      return
+    }
     if (paymentTotalMinor < invoiceTotalMinor || invoiceTotalMinor <= 0) {
       setInventoryError(t('paymentRequired'))
       return
@@ -1072,7 +1121,9 @@ function App() {
       setSaleSubmitting(false)
       return
     }
+    setPaymentDialogOpen(false)
     setSaleReceipt(null)
+    setBatchBalancesByProduct({})
     setPaymentInputValues((current) => {
       const remaining = { ...current }
       delete remaining[activeSaleDraft.id]
@@ -1207,6 +1258,9 @@ function App() {
       setInventoryError(t('setProductPrice'))
       return
     }
+    void loadProductBatches(productId).catch((error: unknown) => {
+      setInventoryError(error instanceof Error ? error.message : String(error))
+    })
     const existing = saleCart.find((line) => line.productId === productId && line.saleUnitId === baseUnit.id)
     if (existing && (existing.quantity + 1) * baseUnit.baseUnitsPerUnit > product.availableUnits) {
       setInventoryError(t('noStockAvailable'))
@@ -1225,6 +1279,62 @@ function App() {
         discountValue: 0,
         discountBasisPoints: 0,
       }])
+  }
+
+  function updateSaleQuantity(productId: number, quantity: number) {
+    setSaleCart((current) => current.map((line) => line.productId === productId
+      ? { ...line, quantity, soldQuantity: quantity }
+      : line))
+  }
+  useEffect(() => {
+    saleShortcutActionsRef.current = {
+      startNewDraft: () => { void startNewSaleDraft() },
+      updateQuantity: updateSaleQuantity,
+      cart: saleCart,
+    }
+  })
+
+  function changeSaleUnit(productId: number, saleUnitId: number) {
+    const product = products.find((entry) => entry.id === productId)
+    const unit = product?.saleUnits?.find((entry) => entry.id === saleUnitId)
+    if (!product || !unit) return
+    if (unit.baseUnitsPerUnit > product.availableUnits) {
+      setInventoryError(t('noStockAvailable'))
+      return
+    }
+    setSaleCart((current) => current.map((line) => line.productId === productId
+      ? {
+        ...line,
+        saleUnitId,
+        soldQuantity: 1,
+        quantity: 1,
+        baseUnitsPerUnit: unit.baseUnitsPerUnit,
+        unitPriceMinor: unit.salePriceMinor,
+      }
+      : line))
+  }
+
+  function changeSaleDiscount(
+    productId: number,
+    discountType: 'percent' | 'amount',
+    value: string,
+  ) {
+    const parsedValue = Number(value) || 0
+    const discountValue = discountType === 'percent'
+      ? Math.max(0, Math.min(10000, Math.round(parsedValue * 100)))
+      : Math.max(0, Math.round(parsedValue * (10 ** invoiceCurrencyExponent)))
+    setSaleCart((current) => current.map((line) => line.productId === productId
+      ? {
+        ...line,
+        discountType,
+        discountValue: discountType === 'amount'
+          ? Math.min(line.quantity * line.unitPriceMinor, Math.round(
+            discountValue * 100 / (10 ** invoiceCurrencyExponent) * exchangeRateScaled / 1_000_000_000,
+          ))
+          : discountValue,
+        discountBasisPoints: discountType === 'percent' ? discountValue : 0,
+      }
+      : line))
   }
 
   async function saveProductPrice(productId: number) {
@@ -2423,7 +2533,7 @@ function App() {
                   drafts={saleDrafts}
                   activeDraftId={activeDraftId}
                   onSelect={selectSaleDraft}
-                  onCreate={() => void createSaleDraft(defaultCurrencyCode)}
+                  onCreate={() => void startNewSaleDraft()}
                 />
                 <div className="pos-layout">
                   <section className="panel pos-catalog">
@@ -2472,33 +2582,27 @@ function App() {
                       onShowProductInfo={(productId) => void showProductBatches(productId)}
                     />
                   </section>
-                  <form ref={saleFormRef} className="panel pos-cart" onSubmit={createSale}>
-                    <div className="panel-heading pos-invoice-heading">
-                      <div><h3>{t('currentSale')}</h3><p>{t('invoiceNumberPending')}</p></div>
-                      <button className="text-button clear-invoice-button" type="button" onClick={() => setClearInvoiceOpen(true)} disabled={!saleCart.length}>
-                        <Trash2 size={16} />{t('clearInvoice')}
-                      </button>
-                    </div>
-                    <div className="invoice-meta">
-                      <div><span>{t('invoice')}</span><strong>—</strong></div>
-                      <div><span>{t('invoiceTime')}</span><strong>{saleStartedAt ? saleStartedAt.slice(0, 16).replace('T', ' ') : '—'}</strong></div>
-                    </div>
-                    <div className="customer-picker">
-                      <label>
-                        <span>{t('customer')}</span>
-                        <select ref={saleCustomerRef} value={saleCustomerId} onChange={(event) => setSaleCustomerId(event.target.value)}>
-                          <option value="">{t('cashCustomer')}</option>
-                          {customers.map((customer) => <option key={customer.id} value={customer.id}>{customer.name}</option>)}
-                        </select>
-                      </label>
-                      <button className="icon-button" type="button" aria-label={t('addCustomerInline')} onClick={() => {
-                        setQuickCustomerOpen(true)
-                        window.setTimeout(() => quickCustomerInputRef.current?.focus(), 0)
-                      }}>
-                        <UserRoundPlus size={18} />
-                      </button>
-                    </div>
-                    {quickCustomerOpen && (
+                  <InvoicePanel
+                    invoiceNumber={activeSaleDraft?.id ?? null}
+                    startedAt={saleStartedAt ? saleStartedAt.slice(0, 16).replace('T', ' ') : ''}
+                    customers={customers}
+                    customerRef={saleCustomerRef}
+                    customerId={saleCustomerId}
+                    note={activeSaleDraft?.note ?? ''}
+                    itemCount={saleCart.length}
+                    totalQuantity={saleCart.reduce((sum, line) => sum + line.quantity, 0)}
+                    subtotal={formatInvoiceMoney(invoiceAmounts.subtotal)}
+                    discount={formatInvoiceMoney(invoiceAmounts.discount)}
+                    tax={formatInvoiceMoney(invoiceTaxMinor)}
+                    taxRate={`${(taxRateBasisPoints / 100).toFixed(2)}%`}
+                    total={formatCurrencyMinor(invoiceTotalMinor, saleCurrencyCode)}
+                    canClear={saleCart.length > 0}
+                    canHold={saleCart.length > 0}
+                    paymentDisabled={saleDraftsLoading || !saleCart.length || saleCart.some((line) => {
+                      const product = products.find((entry) => entry.id === line.productId)
+                      return !product || line.quantity < 1 || line.quantity * line.baseUnitsPerUnit > product.availableUnits
+                    })}
+                    customerExtra={quickCustomerOpen && (
                       <div className="quick-customer-form">
                         <label><span>{t('customerName')}</span><input ref={quickCustomerInputRef} value={quickCustomerName} onChange={(event) => setQuickCustomerName(event.target.value)} required /></label>
                         <label><span>{t('phone')}</span><input type="tel" value={quickCustomerPhone} onChange={(event) => setQuickCustomerPhone(event.target.value)} /></label>
@@ -2508,163 +2612,57 @@ function App() {
                         </div>
                       </div>
                     )}
-                    <div className="pos-cart-items table-scroll">
-                      <table className="invoice-items-table">
-                        <thead>
-                          <tr><th>{t('product')}</th><th>{t('quantityUnits')}</th><th>{t('unitPrice')}</th><th>{t('lineDiscount')}</th><th>{t('amount')}</th><th aria-label={t('removeItem')} /></tr>
-                        </thead>
-                        <tbody>
-                          {saleCart.map((line) => {
-                            const product = products.find((entry) => entry.id === line.productId)
-                            if (!product) return null
-                            const lineSubtotal = line.quantity * product.salePriceMinor
-                            const lineDiscount = Math.round(lineSubtotal * line.discountBasisPoints / 10000)
-                            const lineTotal = lineSubtotal - lineDiscount
-                            return (
-                              <tr
-                                key={line.productId}
-                                className={selectedSaleProductId === line.productId ? 'is-selected' : ''}
-                                onClick={() => setSelectedSaleProductId(line.productId)}
-                                onFocus={() => setSelectedSaleProductId(line.productId)}
-                              >
-                                <td><strong>{isArabic ? product.nameAr : product.nameEn}</strong><small>{product.sku}</small></td>
-                                <td>
-                                  <input
-                                    className="quantity-input"
-                                    aria-label={`${t('quantityUnits')} ${isArabic ? product.nameAr : product.nameEn}`}
-                                    type="number"
-                                    min="1"
-                                    max={product.availableUnits}
-                                    step="1"
-                                    value={line.quantity}
-                                    onChange={(event) => {
-                                      const quantity = event.target.value === ''
-                                        ? 0
-                                        : Math.min(product.availableUnits, Math.max(0, Number(event.target.value) || 0))
-                                      setSaleCart((current) => current.map((entry) => entry.productId === line.productId ? { ...entry, quantity } : entry))
-                                    }}
-                                    onBlur={() => {
-                                      if (line.quantity < 1) setSaleCart((current) => current.map((entry) => entry.productId === line.productId ? { ...entry, quantity: 1 } : entry))
-                                    }}
-                                  />
-                                  <span className="quantity-stepper">
-                                    <button
-                                      className="icon-button"
-                                      type="button"
-                                      aria-label={`${t('decreaseQuantity')} ${isArabic ? product.nameAr : product.nameEn}`}
-                                      disabled={line.quantity <= 1}
-                                      onClick={() => setSaleCart((current) => current.map((entry) => entry.productId === line.productId ? { ...entry, quantity: Math.max(1, entry.quantity - 1) } : entry))}
-                                    >
-                                      <Minus size={13} />
-                                    </button>
-                                    <button
-                                      className="icon-button"
-                                      type="button"
-                                      aria-label={`${t('increaseQuantity')} ${isArabic ? product.nameAr : product.nameEn}`}
-                                      disabled={line.quantity >= product.availableUnits}
-                                      onClick={() => setSaleCart((current) => current.map((entry) => entry.productId === line.productId ? { ...entry, quantity: Math.min(product.availableUnits, entry.quantity + 1) } : entry))}
-                                    >
-                                      <Plus size={13} />
-                                    </button>
-                                  </span>
-                                </td>
-                                <td>{formatInvoiceMoney(product.salePriceMinor)}</td>
-                                <td>
-                                  <input
-                                    className="discount-input"
-                                    aria-label={`${t('lineDiscount')} ${isArabic ? product.nameAr : product.nameEn}`}
-                                    type="number"
-                                    min="0"
-                                    max="99.99"
-                                    step="0.01"
-                                    value={(line.discountBasisPoints / 100).toString()}
-                                    onChange={(event) => {
-                                      const discountBasisPoints = Math.max(0, Math.min(9999, Math.round((Number(event.target.value) || 0) * 100)))
-                                      setSaleCart((current) => current.map((entry) => entry.productId === line.productId
-                                        ? { ...entry, discountBasisPoints }
-                                        : entry))
-                                    }}
-                                  />
-                                </td>
-                                <td><strong>{formatInvoiceMoney(lineTotal)}</strong></td>
-                                <td>
-                                  <button className="icon-button remove-item-button" type="button" aria-label={`${t('removeItem')} ${isArabic ? product.nameAr : product.nameEn}`} onClick={() => setRemoveProductId(product.id)}>
-                                    <X size={15} />
-                                  </button>
-                                </td>
-                              </tr>
-                            )
-                          })}
-                          {saleCart.length === 0 && <tr><td colSpan={6} className="inventory-empty">{t('emptySaleCart')}</td></tr>}
-                        </tbody>
-                      </table>
-                    </div>
-                    <div className="invoice-summary">
-                      <div><span>{t('itemCount')}</span><strong>{saleCart.length}</strong></div>
-                      <div><span>{t('totalQuantity')}</span><strong>{saleCart.reduce((sum, line) => sum + line.quantity, 0)}</strong></div>
-                      <div><span>{t('subtotal')}</span><strong>{formatInvoiceMoney(invoiceAmounts.subtotal)}</strong></div>
-                      <div><span>{t('discounts')}</span><strong>{formatInvoiceMoney(invoiceAmounts.discount)}</strong></div>
-                      <div><span>{t('vat')} ({(taxRateBasisPoints / 100).toFixed(2)}%)</span><strong>{formatInvoiceMoney(invoiceTaxMinor)}</strong></div>
-                      <div className="invoice-grand-total"><span>{t('netTotal')}</span><strong>{formatCurrencyMinor(invoiceTotalMinor, saleCurrencyCode)}</strong></div>
-                    </div>
-                    <section className="payment-section" ref={paymentSectionRef} tabIndex={-1}>
-                      <div className="payment-heading"><h4>{t('paymentMethods')}</h4><kbd>F4</kbd></div>
-                      <div className="currency-settings">
-                        <div className="active-currency-display">
-                          <span>{t('currency')}</span>
-                          <strong>{saleCurrencyCode} · {new Intl.DisplayNames([isArabic ? 'ar' : 'en'], { type: 'currency' }).of(saleCurrencyCode) ?? saleCurrencyCode}</strong>
-                          <small>{t('currencyManagedInSettings')}</small>
-                        </div>
-                      </div>
-                      <div className="payment-methods">
-                        {(['cash', 'card', 'bank_transfer', 'mixed'] as PaymentMethod[]).map((method) => {
-                          const Icon = method === 'cash' ? DollarSign : method === 'card' ? CreditCard : method === 'bank_transfer' ? Landmark : ScanLine
-                          return (
-                            <button
-                              className={`payment-method ${paymentMethod === method ? 'is-active' : ''}`}
-                              type="button"
-                              key={method}
-                              aria-pressed={paymentMethod === method}
-                              onClick={() => setPaymentMethod(method)}
-                            >
-                              <Icon size={17} /><span>{t(method === 'bank_transfer' ? 'bankTransfer' : method === 'mixed' ? 'mixedPayment' : method)}</span>
-                            </button>
-                          )
-                        })}
-                      </div>
-                      {paymentMethod === 'mixed' ? (
-                        <div className="mixed-payment-fields">
-                          {paymentMethods.map((method) => (
-                            <label key={method}>
-                              <span>{t(method === 'bank_transfer' ? 'bankTransfer' : method)}</span>
-                              <input data-payment-field type="number" min="0" step="any" value={paymentAmounts[method]} onChange={(event) => setPaymentAmounts((current) => ({ ...current, [method]: event.target.value }))} />
-                            </label>
-                          ))}
-                        </div>
-                      ) : (
-                        <label className="payment-amount-field">
-                          <span>{t('paidAmount')}</span>
-                          <input
-                            type="number"
-                            data-payment-field
-                            min="0"
-                            step="any"
-                            value={paymentAmounts[paymentMethod]}
-                            placeholder={(invoiceTotalMinor / (10 ** invoiceCurrencyExponent)).toFixed(invoiceCurrencyExponent)}
-                            onChange={(event) => setPaymentAmounts((current) => ({ ...current, [paymentMethod]: event.target.value }))}
-                          />
-                        </label>
-                      )}
-                      <div className="payment-balance">
-                        <div><span>{t('remainingAmount')}</span><strong>{formatCurrencyMinor(remainingMinor, saleCurrencyCode)}</strong></div>
-                        <div><span>{t('changeDue')}</span><strong>{formatCurrencyMinor(changeMinor, saleCurrencyCode)}</strong></div>
-                      </div>
-                    </section>
-                    <button className="primary-button complete-sale-button" type="submit" disabled={saleSubmitting || !saleCart.length || saleCart.some((line) => line.quantity < 1) || paymentTotalMinor < invoiceTotalMinor}>
-                      {saleSubmitting ? t('loading') : t('completeSale')}<span>F8</span>
-                    </button>
-                  </form>
+                    onCustomerChange={setSaleCustomerId}
+                    onCreateCustomer={() => {
+                      setQuickCustomerOpen(true)
+                      window.setTimeout(() => quickCustomerInputRef.current?.focus(), 0)
+                    }}
+                    onNoteChange={(note) => updateActiveDraft((draft) => ({ ...draft, note }))}
+                    onClear={() => setClearInvoiceOpen(true)}
+                    onHold={() => void holdSaleInvoice()}
+                    onPayment={() => setPaymentDialogOpen(true)}
+                  >
+                    <InvoiceItems
+                      key={activeSaleDraft?.id}
+                      items={saleCart}
+                      products={products}
+                      batchesByProduct={batchBalancesByProduct}
+                      selectedProductId={selectedSaleProductId}
+                      isArabic={isArabic}
+                      formatMoney={formatInvoiceMoney}
+                      formatDiscountAmount={(amountMinor) => (
+                        convertInvoiceMinor(amountMinor, saleCurrencyCode) / (10 ** invoiceCurrencyExponent)
+                      ).toFixed(invoiceCurrencyExponent)}
+                      isNearExpiry={(date) => {
+                        const days = daysUntilExpiry(date)
+                        return days >= 0 && days <= 90
+                      }}
+                      onSelect={setSelectedSaleProductId}
+                      onQuantityChange={updateSaleQuantity}
+                      onUnitChange={changeSaleUnit}
+                      onDiscountChange={changeSaleDiscount}
+                      onRemove={setRemoveProductId}
+                    />
+                  </InvoicePanel>
                 </div>
+                <PaymentDialog
+                  open={paymentDialogOpen}
+                  currencyCode={saleCurrencyCode}
+                  currencyName={new Intl.DisplayNames([isArabic ? 'ar' : 'en'], { type: 'currency' }).of(saleCurrencyCode) ?? saleCurrencyCode}
+                  paymentMethod={paymentMethod}
+                  paymentAmounts={paymentAmounts}
+                  invoiceTotalMinor={invoiceTotalMinor}
+                  paymentTotalMinor={paymentTotalMinor}
+                  remainingMinor={remainingMinor}
+                  changeMinor={changeMinor}
+                  currencyExponent={invoiceCurrencyExponent}
+                  submitting={saleSubmitting}
+                  onClose={() => setPaymentDialogOpen(false)}
+                  onMethodChange={setPaymentMethod}
+                  onAmountChange={setPaymentAmounts}
+                  onComplete={() => void createSale()}
+                  formatMinor={formatCurrencyMinor}
+                />
                 {batchInfoProductId !== null && (
                   <div className="pos-modal-backdrop" role="presentation" onMouseDown={(event) => {
                     if (event.target === event.currentTarget) setBatchInfoProductId(null)
