@@ -161,7 +161,7 @@ describe('main application shell', () => {
 
     await user.click(screen.getByRole('button', { name: /مخزون منخفض/ }))
     expect(screen.getByText('أموكسيسيلين')).toBeInTheDocument()
-    expect(screen.queryByText('Paracetamol')).not.toBeInTheDocument()
+    expect(screen.queryByText('باراسيتامول')).not.toBeInTheDocument()
 
     await user.click(screen.getByRole('button', { name: /قريب الانتهاء/ }))
     expect(screen.getByText('فيتامين د')).toBeInTheDocument()
@@ -444,13 +444,13 @@ describe('main application shell', () => {
 
     await user.clear(search)
     await user.click(screen.getByRole('button', { name: /مخزون منخفض/ }))
-    expect(screen.getByText('Amoxicillin')).toBeInTheDocument()
+    expect(screen.getByText('أموكسيسيلين')).toBeInTheDocument()
     expect(screen.queryByText('Paracetamol')).not.toBeInTheDocument()
     expect(screen.queryByText('Vitamin D')).not.toBeInTheDocument()
 
     await user.click(screen.getByRole('button', { name: /نفد المخزون/ }))
-    expect(screen.getByText('Vitamin D')).toBeInTheDocument()
-    expect(screen.queryByText('Amoxicillin')).not.toBeInTheDocument()
+    expect(screen.getByText('فيتامين د')).toBeInTheDocument()
+    expect(screen.queryByText('أموكسيسيلين')).not.toBeInTheDocument()
   })
 
   it('updates line discounts and requires a complete split payment before checkout', async () => {
