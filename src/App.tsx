@@ -290,6 +290,8 @@ function App() {
   const [globalSearch, setGlobalSearch] = useState('')
   const [productCatalogFilter, setProductCatalogFilter] = useState<'all' | 'low' | 'expiring'>('all')
   const [productBarcode, setProductBarcode] = useState('')
+  const [productCategory, setProductCategory] = useState('')
+  const [productCategories, setProductCategories] = useState<Record<number, string>>({})
   const [reorderLevel, setReorderLevel] = useState('0')
   const [saleUnitEditorProductId, setSaleUnitEditorProductId] = useState<number | null>(null)
   const [saleUnitEditingId, setSaleUnitEditingId] = useState<number | null>(null)
@@ -1403,6 +1405,22 @@ function App() {
     }
   }
 
+  async function saveProductCategory(productId: number) {
+    const category = productCategories[productId] ?? ''
+    if (category.length > 100) {
+      setInventoryError(t('invalidProductCategory'))
+      return
+    }
+    setInventoryError('')
+    try {
+      await invoke('update_product_category', { productId, category })
+      setProductCategories((current) => ({ ...current, [productId]: category.trim() }))
+      await refreshProducts()
+    } catch (error) {
+      setInventoryError(error instanceof Error ? error.message : String(error))
+    }
+  }
+
   async function saveProductReorderLevel(productId: number) {
     const value = Number(productReorderLevels[productId])
     if (!Number.isSafeInteger(value) || value < 0) {
@@ -1478,6 +1496,7 @@ function App() {
         nameAr: productNameAr,
         nameEn: productNameEn,
         baseUnit,
+        category: productCategory.trim() || null,
         reorderLevelUnits: Number(reorderLevel),
         salePriceMinor: Math.round(Number(productSalePrice) * 100),
       })
@@ -1486,6 +1505,7 @@ function App() {
       setProductNameEn('')
       setBaseUnit('')
       setProductBarcode('')
+      setProductCategory('')
       setReorderLevel('0')
       setProductSalePrice('')
       await refreshProducts()
@@ -2123,6 +2143,10 @@ function App() {
                   <input value={baseUnit} onChange={(event) => setBaseUnit(event.target.value)} required />
                 </label>
                 <label>
+                  <span>{t('productCategory')}</span>
+                  <input maxLength={100} value={productCategory} onChange={(event) => setProductCategory(event.target.value)} />
+                </label>
+                <label>
                   <span>{t('barcodeOptional')}</span>
                   <input value={productBarcode} onChange={(event) => setProductBarcode(event.target.value)} />
                 </label>
@@ -2164,6 +2188,7 @@ function App() {
                         <th>{t('unitPrice')}</th>
                         <th>{t('availableUnits')}</th>
                         <th>{t('reorderLevel')}</th>
+                        <th>{t('productCategory')}</th>
                         <th>{t('saleUnits')}</th>
                       </tr>
                     </thead>
@@ -2207,6 +2232,17 @@ function App() {
                             </div>
                           </td>
                           <td>
+                            <div className="product-category-editor">
+                              <input
+                                aria-label={`${t('productCategory')} ${isArabic ? product.nameAr : product.nameEn}`}
+                                maxLength={100}
+                                value={productCategories[product.id] ?? product.category}
+                                onChange={(event) => setProductCategories((current) => ({ ...current, [product.id]: event.target.value }))}
+                              />
+                              <button className="text-button" type="button" onClick={() => void saveProductCategory(product.id)}>{t('saveCategory')}</button>
+                            </div>
+                          </td>
+                          <td>
                             <button
                               className="text-button sale-units-open-button"
                               type="button"
@@ -2220,7 +2256,7 @@ function App() {
                       ))}
                       {products.length === 0 && !inventoryLoading && (
                         <tr>
-                          <td colSpan={7} className="inventory-empty">{t('noProducts')}</td>
+                          <td colSpan={8} className="inventory-empty">{t('noProducts')}</td>
                         </tr>
                       )}
                     </tbody>

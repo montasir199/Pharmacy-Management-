@@ -238,6 +238,7 @@ describe('main application shell', () => {
     await user.type(screen.getByLabelText('اسم المنتج بالعربية'), 'دواء جديد')
     await user.type(screen.getByLabelText('اسم المنتج بالإنجليزية'), 'New medicine')
     await user.type(screen.getByLabelText('الوحدة الأساسية'), 'قرص')
+    await user.type(screen.getByLabelText('تصنيف المنتج'), 'مسكنات')
     await user.type(screen.getByLabelText('سعر الوحدة'), '12.50')
     await user.click(screen.getByRole('button', { name: 'حفظ المنتج' }))
 
@@ -247,6 +248,7 @@ describe('main application shell', () => {
         nameAr: 'دواء جديد',
         nameEn: 'New medicine',
         baseUnit: 'قرص',
+        category: 'مسكنات',
         reorderLevelUnits: 0,
         salePriceMinor: 1250,
       }))
@@ -267,6 +269,24 @@ describe('main application shell', () => {
       expect(invokeMock).toHaveBeenCalledWith('update_product_reorder_level', {
         productId: 1,
         reorderLevelUnits: 12,
+      })
+    })
+  })
+
+  it('updates an existing product category for POS filtering', async () => {
+    const user = userEvent.setup()
+    render(<App />)
+    await user.click(screen.getByRole('button', { name: 'المخزون' }))
+
+    const category = await screen.findByRole('textbox', { name: 'تصنيف المنتج باراسيتامول' })
+    await user.clear(category)
+    await user.type(category, 'مضادات حيوية')
+    await user.click(screen.getByRole('button', { name: 'حفظ التصنيف' }))
+
+    await waitFor(() => {
+      expect(invokeMock).toHaveBeenCalledWith('update_product_category', {
+        productId: 1,
+        category: 'مضادات حيوية',
       })
     })
   })
