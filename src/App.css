@@ -2687,3 +2687,91 @@ button:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-vis
   .report-toolbar { align-items: stretch; padding: 12px; }
   .report-period-control,.report-search { width: 100%; min-width: 0; }
 }
+
+
+/* Product catalog: actionable stock and expiry overview. */
+.catalog-stats { margin-bottom: 18px; }
+.catalog-panel { overflow: hidden; }
+.catalog-toolbar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+  padding: 16px 18px;
+  border-bottom: 1px solid var(--line);
+}
+.catalog-toolbar .product-search { flex: 1 1 240px; min-width: min(100%, 220px); margin: 0; }
+.catalog-filters { display: flex; flex-wrap: wrap; gap: 6px; }
+.catalog-filter {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 36px;
+  padding: 0 11px;
+  color: var(--subtle);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 650;
+  background: var(--surface-muted);
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  cursor: pointer;
+  transition: color 150ms ease, background 150ms ease, border-color 150ms ease;
+}
+.catalog-filter span {
+  display: inline-grid;
+  min-width: 20px;
+  height: 20px;
+  padding-inline: 4px;
+  place-items: center;
+  color: inherit;
+  font-size: 10px;
+  background: color-mix(in srgb, currentColor 9%, transparent);
+  border-radius: 6px;
+  font-variant-numeric: tabular-nums;
+}
+.catalog-filter:hover,
+.catalog-filter.is-active {
+  color: var(--green-deep);
+  background: var(--green-soft);
+  border-color: color-mix(in srgb, var(--green) 34%, var(--line));
+}
+.catalog-result-count {
+  margin-inline-start: auto;
+  color: var(--subtle);
+  font-size: 11px;
+  white-space: nowrap;
+}
+.catalog-code {
+  display: inline-block;
+  padding: 4px 7px;
+  color: var(--text);
+  font-size: 11px;
+  font-weight: 650;
+  background: var(--surface-muted);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+}
+.catalog-status {
+  display: inline-flex;
+  align-items: center;
+  min-height: 25px;
+  padding: 3px 9px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+.catalog-status.is-ok { color: #267252; background: #e8f5ed; }
+.catalog-status.is-low { color: #9a4c42; background: #f8eae7; }
+.catalog-status.is-expiring { color: #8a6426; background: #fbf2df; }
+.app-shell[data-theme="dark"] .catalog-status.is-ok { color: #a8dfc1; background: #203d31; }
+.app-shell[data-theme="dark"] .catalog-status.is-low { color: #f0b6a9; background: #422d2b; }
+.app-shell[data-theme="dark"] .catalog-status.is-expiring { color: #efd39a; background: #443922; }
+@media (max-width: 760px) {
+  .catalog-toolbar { align-items: stretch; padding: 13px; }
+  .catalog-toolbar .product-search { width: 100%; }
+  .catalog-filters { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .catalog-filter { justify-content: center; padding-inline: 6px; }
+  .catalog-result-count { margin-inline-start: 0; }
+}
