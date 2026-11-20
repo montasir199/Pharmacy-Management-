@@ -324,6 +324,16 @@ describe('main application shell', () => {
     })
   })
 
+  it('renders the redesigned point-of-sale workspace overview and live invoice metrics', async () => {
+    render(<App />)
+    await userEvent.setup().click(screen.getByRole('button', { name: 'المبيعات' }))
+    expect(await screen.findByRole('region', { name: 'ملخص نقطة البيع' })).toBeInTheDocument()
+    expect(screen.getByText('مساحة البيع')).toBeInTheDocument()
+    expect(screen.getByText('منتجات الكتالوج')).toBeInTheDocument()
+    expect(screen.getByText('أصناف الفاتورة')).toBeInTheDocument()
+    expect(screen.getByText('إجمالي الفاتورة')).toBeInTheDocument()
+  })
+
   it('creates a point-of-sale invoice with a generated number and enables printing', async () => {
     const user = userEvent.setup()
     render(<App />)
