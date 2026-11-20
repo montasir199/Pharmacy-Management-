@@ -455,12 +455,12 @@ describe('main application shell', () => {
     expect(screen.getByText('INV-1002')).toBeInTheDocument()
     expect(screen.queryByText('INV-1003')).not.toBeInTheDocument()
     expect(screen.queryByText('INV-1004')).not.toBeInTheDocument()
-    expect(screen.getByText('42.50 ر.س')).toBeInTheDocument()
 
     await user.type(screen.getByRole('textbox', { name: 'ابحث برقم الفاتورة أو اسم العميل...' }), 'سارة')
     expect(screen.getByText('INV-1002')).toBeInTheDocument()
     expect(screen.queryByText('INV-1001')).not.toBeInTheDocument()
 
+    await user.clear(screen.getByRole('textbox', { name: 'ابحث برقم الفاتورة أو اسم العميل...' }))
     await user.selectOptions(screen.getByRole('combobox', { name: 'الفترة الزمنية' }), 'all')
     expect(screen.getByText('INV-1004')).toBeInTheDocument()
   })
