@@ -1732,6 +1732,25 @@ function App() {
                         </div>
                         <span className="expiry-date">{product.nearestExpiryDate}</span>
                         <span className="expiry-days">{t('daysRemaining', { count: days })}</span>
+                        <button
+                          className="text-button expiry-batches-button"
+                          type="button"
+                          onClick={async () => {
+                            const selectedProductId = String(product.id)
+                            setBatchProductId(selectedProductId)
+                            setInventoryError('')
+                            try {
+                              const balances = await invoke<BatchBalance[]>('get_batch_balances', {
+                                productId: product.id,
+                              })
+                              setBatchBalanceResult({ productId: selectedProductId, balances })
+                            } catch (error) {
+                              setInventoryError(error instanceof Error ? error.message : String(error))
+                            }
+                          }}
+                        >
+                          {t('viewBatches')}
+                        </button>
                       </div>
                     )
                   })}
