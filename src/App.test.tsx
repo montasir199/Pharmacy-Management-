@@ -6,6 +6,21 @@ import i18n from './i18n'
 
 const invokeMock = vi.hoisted(() => vi.fn())
 const isTauriMock = vi.hoisted(() => vi.fn(() => false))
+const makeDraft = (id: number) => ({
+  id,
+  createdAt: '2026-11-19T15:00:00.000Z',
+  updatedAt: '2026-11-19T15:00:00.000Z',
+  customerId: null,
+  note: '',
+  currencyCode: 'SAR',
+  exchangeRateScaled: 1000000000,
+  paymentMethod: 'cash',
+  cashPaidMinor: 0,
+  cardPaidMinor: 0,
+  bankTransferPaidMinor: 0,
+  items: [],
+})
+let nextDraftId = 2
 vi.mock('@tauri-apps/api/core', () => ({
   invoke: invokeMock,
   isTauri: isTauriMock,
@@ -24,6 +39,7 @@ describe('main application shell', () => {
     await i18n.changeLanguage('ar')
     invokeMock.mockReset()
     isTauriMock.mockReturnValue(false)
+    nextDraftId = 2
     invokeMock.mockImplementation((command: string) => {
       if (command === 'get_dashboard') return Promise.resolve({
         todaySalesMinor: 12500,
@@ -40,10 +56,18 @@ describe('main application shell', () => {
         nameAr: 'باراسيتامول',
         nameEn: 'Paracetamol',
         baseUnit: 'قرص',
+        category: 'مسكنات',
         reorderLevelUnits: 5,
         salePriceMinor: 1250,
         availableUnits: 24,
         nearestExpiryDate: new Date(Date.now() + 30 * 86_400_000).toISOString().slice(0, 10),
+        saleUnits: [{
+          id: 1,
+          name: 'قرص',
+          baseUnitsPerUnit: 1,
+          salePriceMinor: 1250,
+          isBaseUnit: true,
+        }],
       }])
       if (command === 'list_currencies') return Promise.resolve([{
         code: 'SAR',
@@ -51,7 +75,15 @@ describe('main application shell', () => {
         symbol: 'ر.س',
         minorUnitExponent: 2,
       }])
+      if (command === 'list_pos_drafts') return Promise.resolve([makeDraft(1)])
+      if (command === 'create_pos_draft') return Promise.resolve(makeDraft(nextDraftId++))
+      if (command === 'save_pos_draft') return Promise.resolve()
       if (command === 'create_sale') return Promise.resolve({
+        id: 1,
+        invoiceNumber: 'INV-20261119-000001',
+        totalMinor: 1250,
+      })
+      if (command === 'create_sale_with_units') return Promise.resolve({
         id: 1,
         invoiceNumber: 'INV-20261119-000001',
         totalMinor: 1250,
@@ -64,6 +96,7 @@ describe('main application shell', () => {
         taxMinor: 0,
         totalMinor: 1250,
         customerName: null,
+        note: 'ملاحظة الفاتورة',
         soldAt: new Date().toISOString(),
         currencyCode: 'SAR',
         exchangeRateScaled: 1000000000,
@@ -72,9 +105,12 @@ describe('main application shell', () => {
           productNameAr: 'باراسيتامول',
           productNameEn: 'Paracetamol',
           quantity: 1,
+          baseQuantity: 1,
+          saleUnitName: 'قرص',
           unitPriceMinor: 1250,
           discountMinor: 0,
           lineTotalMinor: 1250,
+          batches: [{ batchNumber: 'BATCH-1', expiryDate: '2027-01-30', units: 1 }],
         }],
         payments: [{ method: 'cash', amountMinor: 1250, currencyCode: 'SAR' }],
       })
@@ -202,6 +238,7 @@ describe('main application shell', () => {
     await user.type(screen.getByLabelText('اسم المنتج بالعربية'), 'دواء جديد')
     await user.type(screen.getByLabelText('اسم المنتج بالإنجليزية'), 'New medicine')
     await user.type(screen.getByLabelText('الوحدة الأساسية'), 'قرص')
+    await user.type(screen.getByLabelText('تصنيف المنتج'), 'مسكنات')
     await user.type(screen.getByLabelText('سعر الوحدة'), '12.50')
     await user.click(screen.getByRole('button', { name: 'حفظ المنتج' }))
 
@@ -211,6 +248,7 @@ describe('main application shell', () => {
         nameAr: 'دواء جديد',
         nameEn: 'New medicine',
         baseUnit: 'قرص',
+        category: 'مسكنات',
         reorderLevelUnits: 0,
         salePriceMinor: 1250,
       }))
@@ -231,6 +269,24 @@ describe('main application shell', () => {
       expect(invokeMock).toHaveBeenCalledWith('update_product_reorder_level', {
         productId: 1,
         reorderLevelUnits: 12,
+      })
+    })
+  })
+
+  it('updates an existing product category for POS filtering', async () => {
+    const user = userEvent.setup()
+    render(<App />)
+    await user.click(screen.getByRole('button', { name: 'المخزون' }))
+
+    const category = await screen.findByRole('textbox', { name: 'تصنيف المنتج باراسيتامول' })
+    await user.clear(category)
+    await user.type(category, 'مضادات حيوية')
+    await user.click(screen.getByRole('button', { name: 'حفظ التصنيف' }))
+
+    await waitFor(() => {
+      expect(invokeMock).toHaveBeenCalledWith('update_product_category', {
+        productId: 1,
+        category: 'مضادات حيوية',
       })
     })
   })
@@ -265,6 +321,8 @@ describe('main application shell', () => {
     }))
     await user.click(screen.getByRole('button', { name: 'المبيعات' }))
     expect(screen.queryByRole('combobox', { name: 'العملة' })).not.toBeInTheDocument()
+    await user.click(await screen.findByRole('button', { name: /إضافة للفاتورة باراسيتامول/ }))
+    await user.click(screen.getByRole('button', { name: /عملية الدفع/ }))
     expect(screen.getByText(/USD/)).toBeInTheDocument()
   })
 
@@ -334,6 +392,79 @@ describe('main application shell', () => {
     expect(within(catalog).getByRole('button', { name: /إضافة للفاتورة/ })).toBeInTheDocument()
   })
 
+  it('creates an independently priced sale unit for a product', async () => {
+    const user = userEvent.setup()
+    const originalInvoke = invokeMock.getMockImplementation()
+    invokeMock.mockImplementation((command: string, args: Record<string, unknown>) => {
+      if (command === 'save_product_sale_unit') return Promise.resolve(2)
+      return originalInvoke?.(command, args)
+    })
+    render(<App />)
+    await user.click(screen.getByRole('button', { name: 'المخزون' }))
+    await user.click(await screen.findByRole('button', { name: 'إدارة وحدات البيع باراسيتامول' }))
+    expect(screen.getByRole('dialog', { name: 'وحدات البيع' })).toBeInTheDocument()
+
+    await user.type(screen.getByLabelText('اسم الوحدة (مثل شريط أو عبوة)'), 'شريط')
+    await user.clear(screen.getByLabelText('عدد الوحدات الأساسية في وحدة البيع'))
+    await user.type(screen.getByLabelText('عدد الوحدات الأساسية في وحدة البيع'), '10')
+    await user.type(screen.getByLabelText('سعر وحدة البيع'), '10.00')
+    await user.click(screen.getByRole('button', { name: 'حفظ وحدة البيع' }))
+
+    await waitFor(() => {
+      expect(invokeMock).toHaveBeenCalledWith('save_product_sale_unit', {
+        productId: 1,
+        saleUnitId: null,
+        name: 'شريط',
+        baseUnitsPerUnit: 10,
+        salePriceMinor: 1000,
+      })
+    })
+  })
+
+  it('filters POS products by category and opens batch details', async () => {
+    const user = userEvent.setup()
+    render(<App />)
+    await user.click(screen.getByRole('button', { name: 'المبيعات' }))
+
+    await user.click(screen.getByRole('button', { name: 'مسكنات' }))
+    expect(await screen.findByText('باراسيتامول')).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'تفاصيل التشغيلات باراسيتامول' }))
+
+    expect(await screen.findByRole('dialog', { name: 'تفاصيل التشغيلات' })).toBeInTheDocument()
+    expect(screen.getByText('لا توجد أرصدة موجبة لهذا المنتج.')).toBeInTheDocument()
+  })
+
+  it('keeps invoice tabs independent and persists edits to the selected draft', async () => {
+    const user = userEvent.setup()
+    render(<App />)
+    await user.click(screen.getByRole('button', { name: 'المبيعات' }))
+
+    await user.click(await screen.findByRole('button', { name: /إضافة للفاتورة باراسيتامول/ }))
+    await waitFor(() => {
+      expect(invokeMock).toHaveBeenCalledWith('save_pos_draft', expect.objectContaining({
+        draft: expect.objectContaining({
+          id: 1,
+          items: [expect.objectContaining({ productId: 1, soldQuantity: 1 })],
+        }),
+      }))
+    })
+    await user.click(screen.getByRole('button', { name: 'خيارات الفاتورة' }))
+    await user.click(screen.getByRole('button', { name: 'ملاحظة الفاتورة' }))
+    await user.type(screen.getByLabelText('ملاحظة الفاتورة'), 'اتصال بالعميل')
+    await waitFor(() => {
+      expect(invokeMock).toHaveBeenCalledWith('save_pos_draft', expect.objectContaining({
+        draft: expect.objectContaining({ id: 1, note: 'اتصال بالعميل' }),
+      }))
+    })
+    await user.click(screen.getByRole('button', { name: 'خيارات الفاتورة' }))
+    await user.click(screen.getByRole('button', { name: 'تعليق الفاتورة وبدء جديدة' }))
+    expect(await screen.findByRole('tab', { name: /فاتورة 2/ })).toHaveAttribute('aria-selected', 'true')
+    expect(screen.queryByLabelText('الكمية بوحدة المنتج باراسيتامول')).not.toBeInTheDocument()
+
+    await user.click(screen.getByRole('tab', { name: /فاتورة 1/ }))
+    expect(screen.getByLabelText('الكمية بوحدة المنتج باراسيتامول')).toHaveValue(1)
+  })
+
   it('renders the redesigned point-of-sale workspace overview and live invoice metrics', async () => {
     render(<App />)
     await userEvent.setup().click(screen.getByRole('button', { name: 'المبيعات' }))
@@ -350,12 +481,14 @@ describe('main application shell', () => {
     await user.click(screen.getByRole('button', { name: 'المبيعات' }))
 
     await user.click(await screen.findByRole('button', { name: /إضافة للفاتورة باراسيتامول/ }))
+    await user.click(screen.getByRole('button', { name: /عملية الدفع/ }))
     await user.click(screen.getByRole('button', { name: /إتمام البيع/ }))
 
     await waitFor(() => {
-      expect(invokeMock).toHaveBeenCalledWith('create_sale', {
+      expect(invokeMock).toHaveBeenCalledWith('create_sale_with_units', {
+        draftId: 1,
         customerId: null,
-        items: [{ productId: 1, quantity: 1, discountBasisPoints: 0 }],
+        items: [{ productId: 1, saleUnitId: 1, quantity: 1, discountType: 'percent', discountValue: 0 }],
         status: 'paid',
         payments: [{ method: 'cash', amountMinor: 1250, currencyCode: 'SAR' }],
         currencyCode: 'SAR',
@@ -365,7 +498,9 @@ describe('main application shell', () => {
     expect(await screen.findByText('INV-20261119-000001')).toBeInTheDocument()
     expect(screen.getByRole('button', { name: /طباعة الفاتورة/ })).toBeInTheDocument()
     expect(screen.getByText('شكرًا لزيارتكم')).toBeInTheDocument()
-    expect(screen.getByText('المبلغ المدفوع')).toBeInTheDocument()
+    expect(screen.getByText('ملاحظة الفاتورة: ملاحظة الفاتورة')).toBeInTheDocument()
+    expect(screen.getByText(/المبلغ المدفوع/)).toBeInTheDocument()
+    expect(screen.getByText('BATCH-1 · 2027-01-30 · 1')).toBeInTheDocument()
     expect(document.querySelector('.receipt-code-row svg')).toBeInTheDocument()
   })
 
@@ -407,6 +542,7 @@ describe('main application shell', () => {
     render(<App />)
     await user.click(screen.getByRole('button', { name: 'المبيعات' }))
     await user.click(await screen.findByRole('button', { name: /إضافة للفاتورة باراسيتامول/ }))
+    await user.click(screen.getByRole('button', { name: /عملية الدفع/ }))
     await user.click(screen.getByRole('button', { name: /إتمام البيع/ }))
     await screen.findByText('INV-20261119-000001')
     await user.click(screen.getByRole('button', { name: /طباعة الفاتورة/ }))
@@ -432,6 +568,46 @@ describe('main application shell', () => {
     await user.type(barcode, '628100{Enter}')
 
     expect(await screen.findByLabelText('الكمية بوحدة المنتج باراسيتامول')).toHaveValue(1)
+    expect(screen.getByRole('textbox', { name: 'ابحث عن منتج أو رمز...' })).toHaveFocus()
+  })
+
+  it('checks out a product using the selected sale unit and its independent price', async () => {
+    const user = userEvent.setup()
+    const originalInvoke = invokeMock.getMockImplementation()
+    invokeMock.mockImplementation((command: string, args: Record<string, unknown>) => {
+      if (command === 'list_products') return Promise.resolve([{
+        id: 1,
+        sku: 'MED-100',
+        barcode: '628100',
+        nameAr: 'باراسيتامول',
+        nameEn: 'Paracetamol',
+        baseUnit: 'قرص',
+        category: 'مسكنات',
+        reorderLevelUnits: 5,
+        salePriceMinor: 1250,
+        availableUnits: 24,
+        nearestExpiryDate: null,
+        saleUnits: [
+          { id: 1, name: 'قرص', baseUnitsPerUnit: 1, salePriceMinor: 1250, isBaseUnit: true },
+          { id: 2, name: 'شريط', baseUnitsPerUnit: 10, salePriceMinor: 9000, isBaseUnit: false },
+        ],
+      }])
+      return originalInvoke?.(command, args)
+    })
+    render(<App />)
+    await user.click(screen.getByRole('button', { name: 'المبيعات' }))
+    await user.click(await screen.findByRole('button', { name: /إضافة للفاتورة باراسيتامول/ }))
+    await user.selectOptions(screen.getByLabelText('وحدة البيع باراسيتامول'), '2')
+    expect(screen.getAllByText(/٩٠٫٠٠/).length).toBeGreaterThan(0)
+    await user.click(screen.getByRole('button', { name: /عملية الدفع/ }))
+    await user.click(screen.getByRole('button', { name: /إتمام البيع/ }))
+
+    await waitFor(() => {
+      expect(invokeMock).toHaveBeenCalledWith('create_sale_with_units', expect.objectContaining({
+        items: [{ productId: 1, saleUnitId: 2, quantity: 1, discountType: 'percent', discountValue: 0 }],
+        payments: [{ method: 'cash', amountMinor: 9000, currencyCode: 'SAR' }],
+      }))
+    })
   })
 
   it('supports checkout keyboard shortcuts and quick quantity changes', async () => {
@@ -448,6 +624,17 @@ describe('main application shell', () => {
     expect(screen.getByRole('textbox', { name: 'ابحث عن منتج أو رمز...' })).toHaveFocus()
     await user.keyboard('{F6}')
     expect(screen.getByRole('textbox', { name: 'امسح الباركود أو اكتبه' })).toHaveFocus()
+    await user.click(screen.getByRole('tab', { name: /فاتورة 1/ }))
+    await user.keyboard('+')
+    expect(quantity).toHaveValue(3)
+    await user.keyboard('-')
+    expect(quantity).toHaveValue(2)
+    await user.keyboard('{F4}')
+    expect(screen.getByRole('dialog', { name: 'طرق الدفع' })).toBeInTheDocument()
+    await user.keyboard('{Escape}')
+    expect(screen.queryByRole('dialog', { name: 'طرق الدفع' })).not.toBeInTheDocument()
+    await user.keyboard('{Control>}n{/Control}')
+    expect(await screen.findByRole('tab', { name: /فاتورة 2/ })).toHaveAttribute('aria-selected', 'true')
   })
 
   it('filters point-of-sale products by stock and searches using Arabic-Indic barcode digits', async () => {
@@ -490,6 +677,7 @@ describe('main application shell', () => {
     await user.type(screen.getByLabelText('الكمية بوحدة المنتج باراسيتامول'), '2')
     await user.clear(screen.getByLabelText('خصم % باراسيتامول'))
     await user.type(screen.getByLabelText('خصم % باراسيتامول'), '10')
+    await user.click(screen.getByRole('button', { name: /عملية الدفع/ }))
     await user.click(screen.getByRole('button', { name: 'دفع مختلط' }))
 
     const completeSale = screen.getByRole('button', { name: /إتمام البيع/ })
@@ -497,12 +685,21 @@ describe('main application shell', () => {
 
     await user.type(screen.getByLabelText('نقدًا'), '10')
     await user.type(screen.getByLabelText('بطاقة'), '12.5')
+    expect(screen.getByLabelText('نقدًا')).toHaveValue(10)
+    expect(screen.getByLabelText('بطاقة')).toHaveValue(12.5)
     expect(completeSale).toBeEnabled()
     await user.click(completeSale)
 
     await waitFor(() => {
-      expect(invokeMock).toHaveBeenCalledWith('create_sale', expect.objectContaining({
-        items: [{ productId: 1, quantity: 2, discountBasisPoints: 1000 }],
+      expect(invokeMock).toHaveBeenCalledWith('create_sale_with_units', expect.objectContaining({
+        draftId: 1,
+        items: [{
+          productId: 1,
+          saleUnitId: 1,
+          quantity: 2,
+          discountType: 'percent',
+          discountValue: 1000,
+        }],
         payments: [
           { method: 'cash', amountMinor: 1000, currencyCode: 'SAR' },
           { method: 'card', amountMinor: 1250, currencyCode: 'SAR' },

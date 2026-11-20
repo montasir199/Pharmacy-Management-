@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use rusqlite::{params, Connection, OptionalExtension, Transaction, TransactionBehavior};
 use serde::Serialize;
 use thiserror::Error;
@@ -27,6 +29,10 @@ pub enum InventoryError {
     },
     #[error("stock quantity overflow")]
     QuantityOverflow,
+    #[error("invalid product category")]
+    InvalidCategory,
+    #[error("invalid sale unit")]
+    InvalidSaleUnit,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -57,10 +63,22 @@ pub struct ProductSummary {
     pub name_ar: String,
     pub name_en: String,
     pub base_unit: String,
+    pub category: String,
     pub reorder_level_units: i64,
     pub sale_price_minor: i64,
     pub available_units: i64,
     pub nearest_expiry_date: Option<String>,
+    pub sale_units: Vec<ProductSaleUnitSummary>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProductSaleUnitSummary {
+    pub id: i64,
+    pub name: String,
+    pub base_units_per_unit: i64,
+    pub sale_price_minor: i64,
+    pub is_base_unit: bool,
 }
 
 #[derive(Debug)]
@@ -81,20 +99,52 @@ pub fn create_product(
     reorder_level_units: i64,
     sale_price_minor: i64,
 ) -> Result<i64, InventoryError> {
+    create_product_with_category(
+        connection,
+        sku,
+        barcode,
+        name_ar,
+        name_en,
+        base_unit,
+        reorder_level_units,
+        sale_price_minor,
+        None,
+    )
+}
+
+pub fn create_product_with_category(
+    connection: &Connection,
+    sku: &str,
+    barcode: Option<&str>,
+    name_ar: &str,
+    name_en: &str,
+    base_unit: &str,
+    reorder_level_units: i64,
+    sale_price_minor: i64,
+    category: Option<&str>,
+) -> Result<i64, InventoryError> {
     if [sku, name_ar, name_en, base_unit]
         .iter()
         .any(|value| value.trim().is_empty())
         || barcode.is_some_and(|value| value.trim().is_empty())
         || reorder_level_units < 0
         || sale_price_minor < 0
+        || category.is_some_and(|value| value.chars().count() > 100)
     {
-        return Err(InventoryError::InvalidProduct);
+        return Err(
+            if category.is_some_and(|value| value.chars().count() > 100) {
+                InventoryError::InvalidCategory
+            } else {
+                InventoryError::InvalidProduct
+            },
+        );
     }
 
-    connection.execute(
+    let transaction = connection.unchecked_transaction()?;
+    transaction.execute(
         "INSERT INTO products
-         (sku, barcode, name_ar, name_en, base_unit, reorder_level_units, sale_price_minor)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+         (sku, barcode, name_ar, name_en, base_unit, reorder_level_units, sale_price_minor, category)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
         params![
             sku.trim(),
             barcode.map(str::trim),
@@ -102,10 +152,19 @@ pub fn create_product(
             name_en.trim(),
             base_unit.trim(),
             reorder_level_units,
-            sale_price_minor
+            sale_price_minor,
+            category.map(str::trim).unwrap_or_default()
         ],
     )?;
-    Ok(connection.last_insert_rowid())
+    let product_id = transaction.last_insert_rowid();
+    transaction.execute(
+        "INSERT INTO product_sale_units
+         (product_id, name, base_units_per_unit, sale_price_minor, is_base_unit)
+         VALUES (?1, ?2, 1, ?3, 1)",
+        params![product_id, base_unit.trim(), sale_price_minor],
+    )?;
+    transaction.commit()?;
+    Ok(product_id)
 }
 
 pub fn update_product_sale_price(
@@ -116,7 +175,8 @@ pub fn update_product_sale_price(
     if product_id <= 0 || sale_price_minor < 0 {
         return Err(InventoryError::InvalidProduct);
     }
-    let updated = connection.execute(
+    let transaction = connection.unchecked_transaction()?;
+    let updated = transaction.execute(
         "UPDATE products SET sale_price_minor = ?1,
          updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
          WHERE id = ?2 AND is_enabled = 1",
@@ -125,7 +185,122 @@ pub fn update_product_sale_price(
     if updated == 0 {
         return Err(InventoryError::InvalidProductId);
     }
+    transaction.execute(
+        "UPDATE product_sale_units SET sale_price_minor = ?1
+         WHERE product_id = ?2 AND is_base_unit = 1",
+        params![sale_price_minor, product_id],
+    )?;
+    transaction.commit()?;
     Ok(())
+}
+
+pub fn update_product_category(
+    connection: &Connection,
+    product_id: i64,
+    category: &str,
+) -> Result<(), InventoryError> {
+    if product_id <= 0 {
+        return Err(InventoryError::InvalidProductId);
+    }
+    if category.chars().count() > 100 {
+        return Err(InventoryError::InvalidCategory);
+    }
+    let updated = connection.execute(
+        "UPDATE products SET category = ?1,
+         updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+         WHERE id = ?2 AND is_enabled = 1",
+        params![category.trim(), product_id],
+    )?;
+    if updated == 0 {
+        return Err(InventoryError::InvalidProductId);
+    }
+    Ok(())
+}
+
+pub fn save_product_sale_unit(
+    connection: &Connection,
+    product_id: i64,
+    sale_unit_id: Option<i64>,
+    name: &str,
+    base_units_per_unit: i64,
+    sale_price_minor: i64,
+) -> Result<i64, InventoryError> {
+    if product_id <= 0
+        || name.trim().is_empty()
+        || base_units_per_unit <= 0
+        || sale_price_minor < 0
+        || name.chars().count() > 40
+    {
+        return Err(InventoryError::InvalidSaleUnit);
+    }
+
+    let transaction = connection.unchecked_transaction()?;
+    let product_enabled: bool = transaction
+        .query_row(
+            "SELECT is_enabled FROM products WHERE id = ?1",
+            [product_id],
+            |row| row.get(0),
+        )
+        .optional()?
+        .ok_or(InventoryError::InvalidProductId)?;
+    if !product_enabled {
+        return Err(InventoryError::ProductDisabled);
+    }
+
+    let unit_id = if let Some(sale_unit_id) = sale_unit_id {
+        let is_base_unit: bool = transaction
+            .query_row(
+                "SELECT is_base_unit FROM product_sale_units
+                 WHERE id = ?1 AND product_id = ?2",
+                params![sale_unit_id, product_id],
+                |row| row.get(0),
+            )
+            .optional()?
+            .ok_or(InventoryError::InvalidSaleUnit)?;
+        if (is_base_unit && base_units_per_unit != 1) || (!is_base_unit && base_units_per_unit == 1)
+        {
+            return Err(InventoryError::InvalidSaleUnit);
+        }
+        transaction.execute(
+            "UPDATE product_sale_units
+             SET name = ?1, base_units_per_unit = ?2, sale_price_minor = ?3, is_enabled = 1
+             WHERE id = ?4 AND product_id = ?5",
+            params![
+                name.trim(),
+                base_units_per_unit,
+                sale_price_minor,
+                sale_unit_id,
+                product_id
+            ],
+        )?;
+        if is_base_unit {
+            transaction.execute(
+                "UPDATE products SET base_unit = ?1, sale_price_minor = ?2,
+                 updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+                 WHERE id = ?3",
+                params![name.trim(), sale_price_minor, product_id],
+            )?;
+        }
+        sale_unit_id
+    } else {
+        if base_units_per_unit == 1 {
+            return Err(InventoryError::InvalidSaleUnit);
+        }
+        transaction.execute(
+            "INSERT INTO product_sale_units
+             (product_id, name, base_units_per_unit, sale_price_minor)
+             VALUES (?1, ?2, ?3, ?4)",
+            params![
+                product_id,
+                name.trim(),
+                base_units_per_unit,
+                sale_price_minor
+            ],
+        )?;
+        transaction.last_insert_rowid()
+    };
+    transaction.commit()?;
+    Ok(unit_id)
 }
 
 pub fn update_product_reorder_level(
@@ -376,6 +551,7 @@ pub fn list_products(connection: &Connection) -> Result<Vec<ProductSummary>, Inv
     let mut statement = connection.prepare(
         "SELECT products.id, products.sku, products.barcode,
                 products.name_ar, products.name_en, products.base_unit,
+                products.category,
                 products.reorder_level_units,
                 products.sale_price_minor,
                 COALESCE(SUM(stock_movements.delta_units), 0) AS available_units,
@@ -397,7 +573,7 @@ pub fn list_products(connection: &Connection) -> Result<Vec<ProductSummary>, Inv
          GROUP BY products.id
          ORDER BY products.name_ar COLLATE NOCASE ASC",
     )?;
-    let products = statement
+    let mut products = statement
         .query_map([], |row| {
             Ok(ProductSummary {
                 id: row.get(0)?,
@@ -406,13 +582,39 @@ pub fn list_products(connection: &Connection) -> Result<Vec<ProductSummary>, Inv
                 name_ar: row.get(3)?,
                 name_en: row.get(4)?,
                 base_unit: row.get(5)?,
-                reorder_level_units: row.get(6)?,
-                sale_price_minor: row.get(7)?,
-                available_units: row.get(8)?,
-                nearest_expiry_date: row.get(9)?,
+                category: row.get(6)?,
+                reorder_level_units: row.get(7)?,
+                sale_price_minor: row.get(8)?,
+                available_units: row.get(9)?,
+                nearest_expiry_date: row.get(10)?,
+                sale_units: Vec::new(),
             })
         })?
         .collect::<Result<Vec<_>, _>>()?;
+    let mut unit_statement = connection.prepare(
+        "SELECT id, product_id, name, base_units_per_unit, sale_price_minor, is_base_unit
+         FROM product_sale_units WHERE is_enabled = 1
+         ORDER BY product_id, is_base_unit DESC, base_units_per_unit",
+    )?;
+    let mut units_by_product: HashMap<i64, Vec<ProductSaleUnitSummary>> = HashMap::new();
+    for unit in unit_statement.query_map([], |row| {
+        Ok((
+            row.get::<_, i64>(1)?,
+            ProductSaleUnitSummary {
+                id: row.get(0)?,
+                name: row.get(2)?,
+                base_units_per_unit: row.get(3)?,
+                sale_price_minor: row.get(4)?,
+                is_base_unit: row.get(5)?,
+            },
+        ))
+    })? {
+        let (product_id, unit) = unit?;
+        units_by_product.entry(product_id).or_default().push(unit);
+    }
+    for product in &mut products {
+        product.sale_units = units_by_product.remove(&product.id).unwrap_or_default();
+    }
     Ok(products)
 }
 
@@ -480,6 +682,29 @@ mod tests {
             update_product_reorder_level(&connection, i64::MAX, 5),
             Err(InventoryError::InvalidProductId)
         ));
+    }
+
+    #[test]
+    fn stores_categories_and_independently_priced_sale_units() {
+        let (_directory, connection, product_id) = setup_inventory();
+        let unit_id = save_product_sale_unit(&connection, product_id, None, "شريط", 10, 8500)
+            .expect("create independently priced sale unit");
+        update_product_category(&connection, product_id, "مسكنات").expect("categorize product");
+        update_product_sale_price(&connection, product_id, 1500).expect("update base unit price");
+
+        let product = &list_products(&connection).expect("list products")[0];
+        assert_eq!(product.category, "مسكنات");
+        assert_eq!(product.sale_price_minor, 1500);
+        assert_eq!(product.sale_units.len(), 2);
+        assert!(product.sale_units.iter().any(|unit| {
+            unit.id == unit_id
+                && unit.name == "شريط"
+                && unit.base_units_per_unit == 10
+                && unit.sale_price_minor == 8500
+        }));
+        assert!(product.sale_units.iter().any(|unit| {
+            unit.is_base_unit && unit.name == "قرص" && unit.sale_price_minor == 1500
+        }));
     }
 
     #[test]

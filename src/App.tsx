@@ -14,13 +14,10 @@ import {
   CircleHelp,
   ClipboardList,
   CreditCard,
-  DollarSign,
   Eye,
   Globe2,
-  Landmark,
   LayoutDashboard,
   Menu,
-  Minus,
   Moon,
   Package,
   Plus,
@@ -29,31 +26,26 @@ import {
   Search,
   Settings,
   ShoppingCart,
-  ScanLine,
   Sun,
-  Trash2,
   Users,
-  UserRoundPlus,
   X,
 } from 'lucide-react'
 import Barcode from 'react-barcode'
 import { QRCodeSVG } from 'qrcode.react'
 import { useTranslation } from 'react-i18next'
+import { ProductGrid } from './modules/pos/ProductGrid'
+import { ProductSearch } from './modules/pos/ProductSearch'
+import { InvoiceTabs } from './modules/pos/InvoiceTabs'
+import { InvoiceItems } from './modules/pos/InvoiceItems'
+import { InvoicePanel } from './modules/pos/InvoicePanel'
+import { PaymentDialog } from './modules/pos/PaymentDialog'
+import { normalizeProductSearch } from './modules/pos/search'
+import { usePosDrafts } from './modules/pos/usePosDrafts'
+import type { PosDraftItem, ProductSummary, SaleStockFilter } from './modules/pos/types'
+import type { PaymentAmounts, PaymentMethod } from './modules/pos/PaymentDialog'
 import './App.css'
 
 type Theme = 'light' | 'dark'
-type ProductSummary = {
-  id: number
-  sku: string
-  barcode: string | null
-  nameAr: string
-  nameEn: string
-  baseUnit: string
-  reorderLevelUnits: number
-  salePriceMinor: number
-  availableUnits: number
-  nearestExpiryDate: string | null
-}
 type BatchBalance = {
   batchId: number
   batchNumber: string
@@ -95,7 +87,7 @@ type CurrencySummary = {
   symbol: string
   minorUnitExponent: number
 }
-type SaleCartLine = { productId: number; quantity: number; discountBasisPoints: number }
+type SaleCartLine = PosDraftItem & { quantity: number; discountBasisPoints: number }
 type SaleReceipt = {
   id: number
   invoiceNumber: string
@@ -104,6 +96,7 @@ type SaleReceipt = {
   taxMinor: number
   totalMinor: number
   customerName: string | null
+  note: string
   soldAt: string
   currencyCode: string
   exchangeRateScaled: number
@@ -112,9 +105,12 @@ type SaleReceipt = {
     productNameAr: string
     productNameEn: string
     quantity: number
+    baseQuantity: number
+    saleUnitName: string
     unitPriceMinor: number
     discountMinor: number
     lineTotalMinor: number
+    batches: Array<{ batchNumber: string; expiryDate: string; units: number }>
   }>
   payments: Array<{ method: string; amountMinor: number; currencyCode: string }>
 }
@@ -149,7 +145,6 @@ type PrintJob = {
   lastError: string | null
   createdAt: string
 }
-type PaymentMethod = 'cash' | 'card' | 'bank_transfer' | 'mixed'
 type NavigationKey =
   | 'dashboard'
   | 'sales'
@@ -189,18 +184,6 @@ const emptyPrinter: PrinterConfig = {
   isDefault: false,
 }
 
-function normalizeProductSearch(value: string): string {
-  return value
-    .normalize('NFKC')
-    .toLocaleLowerCase()
-    .replace(/[\u064B-\u065F\u0670\u0640]/g, '')
-    .replace(/[أإآ]/g, 'ا')
-    .replace(/ى/g, 'ي')
-    .replace(/[٠-٩]/g, (digit) => String(digit.charCodeAt(0) - 0x0660))
-    .replace(/[۰-۹]/g, (digit) => String(digit.charCodeAt(0) - 0x06f0))
-    .trim()
-}
-
 function daysUntilExpiry(dateValue: string): number {
   const [year, month, day] = dateValue.split('-').map(Number)
   if (!year || !month || !day) return Number.POSITIVE_INFINITY
@@ -227,6 +210,8 @@ function App() {
     productId: string
     balances: BatchBalance[]
   } | null>(null)
+  const [batchBalancesByProduct, setBatchBalancesByProduct] = useState<Record<number, BatchBalance[]>>({})
+  const [batchInfoProductId, setBatchInfoProductId] = useState<number | null>(null)
   const [inventoryError, setInventoryError] = useState('')
   const [inventoryLoading, setInventoryLoading] = useState(false)
   const [productNameAr, setProductNameAr] = useState('')
@@ -263,22 +248,27 @@ function App() {
   const [batchExpiry, setBatchExpiry] = useState('')
   const [batchUnits, setBatchUnits] = useState('')
   const [batchProductId, setBatchProductId] = useState('')
-  const [saleCustomerId, setSaleCustomerId] = useState('')
-  const [saleCart, setSaleCart] = useState<SaleCartLine[]>([])
+  const {
+    drafts: saleDrafts,
+    activeDraft: activeSaleDraft,
+    activeDraftId,
+    loading: saleDraftsLoading,
+    error: saleDraftError,
+    clearError: clearSaleDraftError,
+    flushActiveDraft: flushSaleDraft,
+    selectDraft: selectSaleDraft,
+    createDraft: createSaleDraft,
+    updateActiveDraft,
+    finishDraft,
+  } = usePosDrafts()
   const [saleSearch, setSaleSearch] = useState('')
-  const [saleStockFilter, setSaleStockFilter] = useState<'all' | 'available' | 'low' | 'out'>('all')
+  const [saleStockFilter, setSaleStockFilter] = useState<SaleStockFilter>('all')
+  const [saleCategory, setSaleCategory] = useState('')
   const [saleBarcode, setSaleBarcode] = useState('')
   const [currencies, setCurrencies] = useState<CurrencySummary[]>([])
-  const [saleCurrencyCode, setSaleCurrencyCode] = useState('SAR')
-
-  const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>('cash')
-  const [paymentAmounts, setPaymentAmounts] = useState<Record<'cash' | 'card' | 'bank_transfer', string>>({
-    cash: '',
-    card: '',
-    bank_transfer: '',
-  })
+  const [defaultCurrencyCode, setDefaultCurrencyCode] = useState('SAR')
   const [saleSubmitting, setSaleSubmitting] = useState(false)
-  const [saleStartedAt, setSaleStartedAt] = useState(() => new Date())
+  const [paymentDialogOpen, setPaymentDialogOpen] = useState(false)
   const [quickCustomerOpen, setQuickCustomerOpen] = useState(false)
   const [quickCustomerName, setQuickCustomerName] = useState('')
   const [quickCustomerPhone, setQuickCustomerPhone] = useState('')
@@ -300,13 +290,24 @@ function App() {
   const [globalSearch, setGlobalSearch] = useState('')
   const [productCatalogFilter, setProductCatalogFilter] = useState<'all' | 'low' | 'expiring'>('all')
   const [productBarcode, setProductBarcode] = useState('')
+  const [productCategory, setProductCategory] = useState('')
+  const [productCategories, setProductCategories] = useState<Record<number, string>>({})
   const [reorderLevel, setReorderLevel] = useState('0')
+  const [saleUnitEditorProductId, setSaleUnitEditorProductId] = useState<number | null>(null)
+  const [saleUnitEditingId, setSaleUnitEditingId] = useState<number | null>(null)
+  const [saleUnitName, setSaleUnitName] = useState('')
+  const [saleUnitBaseUnits, setSaleUnitBaseUnits] = useState('2')
+  const [saleUnitPrice, setSaleUnitPrice] = useState('')
+  const [saleUnitSaving, setSaleUnitSaving] = useState(false)
   const [sales, setSales] = useState<SaleSummary[]>([])
   const saleSearchRef = useRef<HTMLInputElement>(null)
   const saleBarcodeRef = useRef<HTMLInputElement>(null)
   const saleCustomerRef = useRef<HTMLSelectElement>(null)
-  const paymentSectionRef = useRef<HTMLDivElement>(null)
-  const saleFormRef = useRef<HTMLFormElement>(null)
+  const saleShortcutActionsRef = useRef<{
+    startNewDraft: () => void
+    updateQuantity: (productId: number, quantity: number) => void
+    cart: SaleCartLine[]
+  }>({ startNewDraft: () => {}, updateQuantity: () => {}, cart: [] })
   const quickCustomerInputRef = useRef<HTMLInputElement>(null)
   const receiptRef = useRef<HTMLDivElement>(null)
   const testReceiptRef = useRef<HTMLDivElement>(null)
@@ -314,6 +315,25 @@ function App() {
   const retryPrintStartedRef = useRef<number | null>(null)
   const sendReceiptRef = useRef<((saleId: number, printer: PrinterConfig, retryJobId?: number) => Promise<void>) | null>(null)
   const [printerTestTime] = useState(() => new Date())
+  const saleCart: SaleCartLine[] = activeSaleDraft?.items.map((item) => {
+    const product = products.find((entry) => entry.id === item.productId)
+    const baseUnit = product?.saleUnits?.find((unit) => unit.isBaseUnit)
+    return {
+      ...item,
+      saleUnitId: item.saleUnitId ?? baseUnit?.id ?? 0,
+      quantity: item.soldQuantity,
+      discountBasisPoints: item.discountType === 'percent' ? item.discountValue : 0,
+    }
+  }) ?? []
+  const saleCustomerId = activeSaleDraft?.customerId ? String(activeSaleDraft.customerId) : ''
+  const paymentMethod = activeSaleDraft?.paymentMethod ?? 'cash'
+  const saleCurrencyCode = activeSaleDraft?.currencyCode ?? defaultCurrencyCode
+  const saleStartedAt = activeSaleDraft?.createdAt ?? ''
+  const [paymentInputValues, setPaymentInputValues] = useState<Record<number, {
+    cash: string
+    card: string
+    bank_transfer: string
+  }>>({})
   const taxRateBasisPoints = Math.max(0, Math.min(10000, Math.round((Number(pharmacyTaxRate) || 0) * 100)))
   const [availableUpdate, setAvailableUpdate] = useState<{
     version: string
@@ -368,11 +388,15 @@ function App() {
     const matchesSearch = !saleSearchQuery || [product.nameAr, product.nameEn, product.sku, product.barcode ?? '']
       .some((value) => normalizeProductSearch(value).includes(saleSearchQuery))
     if (!matchesSearch) return false
-    if (saleStockFilter === 'available') return product.availableUnits > 0
-    if (saleStockFilter === 'low') return product.availableUnits > 0 && product.availableUnits <= product.reorderLevelUnits
-    if (saleStockFilter === 'out') return product.availableUnits === 0
+    if (saleStockFilter === 'available' && product.availableUnits <= 0) return false
+    if (saleStockFilter === 'low' && !(product.availableUnits > 0 && product.availableUnits <= product.reorderLevelUnits)) return false
+    if (saleStockFilter === 'out' && product.availableUnits !== 0) return false
+    if (saleCategory && product.category !== saleCategory) return false
     return true
   })
+  const saleCategories = [...new Set(products.map((product) => product.category).filter(Boolean))].sort((a, b) => a.localeCompare(b))
+  const batchInfoProduct = products.find((product) => product.id === batchInfoProductId)
+  const saleUnitEditorProduct = products.find((product) => product.id === saleUnitEditorProductId) ?? null
   const saleAvailableCount = products.filter((product) => product.availableUnits > 0).length
   const saleLowStockCount = products.filter((product) => product.availableUnits > 0 && product.availableUnits <= product.reorderLevelUnits).length
   const saleOutOfStockCount = products.filter((product) => product.availableUnits === 0).length
@@ -380,11 +404,84 @@ function App() {
   const chartMax = Math.max(...dailySales.map((day) => day.totalMinor), 0)
   const invoiceCurrencyExponent = currencies.find((currency) => currency.code === saleCurrencyCode)?.minorUnitExponent ?? 2
   const exchangeRateScaled = 1_000_000_000
+  const paymentAmounts = activeSaleDraft
+    ? paymentInputValues[activeSaleDraft.id] ?? {
+      cash: activeSaleDraft.cashPaidMinor ? (activeSaleDraft.cashPaidMinor / (10 ** invoiceCurrencyExponent)).toFixed(invoiceCurrencyExponent) : '',
+      card: activeSaleDraft.cardPaidMinor ? (activeSaleDraft.cardPaidMinor / (10 ** invoiceCurrencyExponent)).toFixed(invoiceCurrencyExponent) : '',
+      bank_transfer: activeSaleDraft.bankTransferPaidMinor ? (activeSaleDraft.bankTransferPaidMinor / (10 ** invoiceCurrencyExponent)).toFixed(invoiceCurrencyExponent) : '',
+    }
+    : { cash: '', card: '', bank_transfer: '' }
+  function setPaymentAmounts(
+    update: PaymentAmounts | ((current: PaymentAmounts) => PaymentAmounts),
+  ) {
+    if (!activeSaleDraft) return
+    const next = typeof update === 'function' ? update(paymentAmounts) : update
+    setPaymentInputValues((current) => ({ ...current, [activeSaleDraft.id]: next }))
+    updateActiveDraft((draft) => ({
+      ...draft,
+      cashPaidMinor: Math.round((Number(next.cash) || 0) * (10 ** invoiceCurrencyExponent)),
+      cardPaidMinor: Math.round((Number(next.card) || 0) * (10 ** invoiceCurrencyExponent)),
+      bankTransferPaidMinor: Math.round((Number(next.bank_transfer) || 0) * (10 ** invoiceCurrencyExponent)),
+    }))
+  }
+  function setPaymentMethod(method: PaymentMethod) {
+    updateActiveDraft((draft) => ({ ...draft, paymentMethod: method }))
+  }
+  async function startNewSaleDraft() {
+    try {
+      if (activeSaleDraft) await flushSaleDraft()
+      await createSaleDraft(defaultCurrencyCode)
+    } catch (error) {
+      setInventoryError(error instanceof Error ? error.message : String(error))
+    }
+  }
+  async function holdSaleInvoice() {
+    if (!saleCart.length) return
+    await startNewSaleDraft()
+  }
+  function setSaleCustomerId(value: string) {
+    updateActiveDraft((draft) => ({ ...draft, customerId: value ? Number(value) : null }))
+  }
+  function applyDefaultCurrency(currencyCode: string) {
+    setDefaultCurrencyCode(currencyCode)
+    updateActiveDraft((draft) => draft.items.length === 0
+      ? { ...draft, currencyCode }
+      : draft)
+  }
+  function setSaleCart(
+    update: SaleCartLine[] | ((current: SaleCartLine[]) => SaleCartLine[]),
+  ) {
+    updateActiveDraft((draft) => {
+      const current = draft.items.map((item): SaleCartLine => {
+        const product = products.find((entry) => entry.id === item.productId)
+        const baseUnit = product?.saleUnits?.find((unit) => unit.isBaseUnit)
+        return {
+          ...item,
+          saleUnitId: item.saleUnitId ?? baseUnit?.id ?? 0,
+          quantity: item.soldQuantity,
+          discountBasisPoints: item.discountType === 'percent' ? item.discountValue : 0,
+        }
+      })
+      const next = typeof update === 'function' ? update(current) : update
+      return {
+        ...draft,
+        items: next.map((line) => ({
+          productId: line.productId,
+          saleUnitId: line.saleUnitId,
+          soldQuantity: line.quantity,
+          baseUnitsPerUnit: line.baseUnitsPerUnit,
+          unitPriceMinor: line.unitPriceMinor,
+          discountType: line.discountType,
+          discountValue: line.discountType === 'percent' ? line.discountBasisPoints : line.discountValue,
+        })),
+      }
+    })
+  }
   const invoiceAmounts = saleCart.reduce((totals, line) => {
-    const product = products.find((entry) => entry.id === line.productId)
-    if (!product) return totals
-    const lineSubtotal = line.quantity * product.salePriceMinor
-    const lineDiscount = Math.round(lineSubtotal * line.discountBasisPoints / 10000)
+    const lineSubtotal = line.quantity * line.unitPriceMinor
+    const lineDiscount = line.discountType === 'amount'
+      ? Math.min(lineSubtotal, line.discountValue)
+      : Math.round(lineSubtotal * line.discountValue / 10000)
     totals.subtotal += lineSubtotal
     totals.discount += lineDiscount
     return totals
@@ -494,13 +591,24 @@ function App() {
   useEffect(() => {
     if (activePage !== 'sales') return
     const handleSaleShortcut = (event: KeyboardEvent) => {
+      if (event.defaultPrevented) return
+      const isFormControl = event.target instanceof HTMLInputElement
+        || event.target instanceof HTMLTextAreaElement
+        || event.target instanceof HTMLSelectElement
       if (event.key === 'Escape') {
+        if (paymentDialogOpen) {
+          setPaymentDialogOpen(false)
+          return
+        }
         setClearInvoiceOpen(false)
         setRemoveProductId(null)
         setQuickCustomerOpen(false)
         return
       }
-      if (event.key === 'F2') {
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'n') {
+        event.preventDefault()
+        saleShortcutActionsRef.current.startNewDraft()
+      } else if (event.key === 'F2') {
         event.preventDefault()
         saleSearchRef.current?.focus()
       } else if (event.key === 'F3') {
@@ -511,20 +619,29 @@ function App() {
         saleBarcodeRef.current?.focus()
       } else if (event.key === 'F4') {
         event.preventDefault()
-        paymentSectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' })
-        paymentSectionRef.current?.querySelector<HTMLInputElement>('[data-payment-field]')?.focus()
+        setPaymentDialogOpen(true)
       } else if (event.key === 'F8') {
         event.preventDefault()
-        saleFormRef.current?.requestSubmit()
+        if (!paymentDialogOpen) setPaymentDialogOpen(true)
       } else if (event.key === 'Delete' && selectedSaleProductId !== null) {
-        if (event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement) return
+        if (paymentDialogOpen || isFormControl) return
         event.preventDefault()
         setRemoveProductId(selectedSaleProductId)
+      } else if ((event.key === '+' || event.key === '-') && selectedSaleProductId !== null) {
+        if (paymentDialogOpen || isFormControl) return
+        const { cart, updateQuantity } = saleShortcutActionsRef.current
+        const selectedLine = cart.find((line) => line.productId === selectedSaleProductId)
+        if (!selectedLine) return
+        event.preventDefault()
+        updateQuantity(
+          selectedLine.productId,
+          event.key === '+' ? selectedLine.quantity + 1 : Math.max(1, selectedLine.quantity - 1),
+        )
       }
     }
     window.addEventListener('keydown', handleSaleShortcut)
     return () => window.removeEventListener('keydown', handleSaleShortcut)
-  }, [activePage, selectedSaleProductId])
+  }, [activePage, paymentDialogOpen, selectedSaleProductId])
 
   useEffect(() => {
     if (activePage === 'dashboard') { void refreshDashboard(); void refreshProducts() }
@@ -840,7 +957,28 @@ function App() {
         productId: Number(batchProductId),
       })
       setBatchBalanceResult({ productId: batchProductId, balances })
+      setBatchBalancesByProduct((current) => ({ ...current, [Number(batchProductId)]: balances }))
     } catch (error) {
+      setInventoryError(error instanceof Error ? error.message : String(error))
+    }
+  }
+
+  async function loadProductBatches(productId: number) {
+    const cached = batchBalancesByProduct[productId]
+    if (cached) return cached
+    const balances = await invoke<BatchBalance[]>('get_batch_balances', { productId })
+    setBatchBalancesByProduct((current) => ({ ...current, [productId]: balances }))
+    return balances
+  }
+
+  async function showProductBatches(productId: number) {
+    setInventoryError('')
+    setBatchInfoProductId(productId)
+    try {
+      const balances = await loadProductBatches(productId)
+      setBatchBalanceResult({ productId: String(productId), balances })
+    } catch (error) {
+      setBatchInfoProductId(null)
       setInventoryError(error instanceof Error ? error.message : String(error))
     }
   }
@@ -855,7 +993,7 @@ function App() {
       setPharmacyTaxNumber(values[3])
       setPharmacyLogo(values[4])
       setPharmacyTaxRate(values[5] ? (Number(values[5]) / 100).toString() : '0')
-      setSaleCurrencyCode(values[6] || 'SAR')
+      applyDefaultCurrency(values[6] || 'SAR')
     } catch (error) {
       setInventoryError(error instanceof Error ? error.message : String(error))
     }
@@ -897,7 +1035,7 @@ function App() {
       setInventoryError(t('taxRate'))
       return
     }
-    if (!currencies.some((currency) => currency.code === saleCurrencyCode)) {
+    if (!currencies.some((currency) => currency.code === defaultCurrencyCode)) {
       setInventoryError(t('defaultCurrency'))
       return
     }
@@ -910,7 +1048,7 @@ function App() {
           pharmacy_tax_number: pharmacyTaxNumber,
           pharmacy_logo: pharmacyLogo,
           tax_rate_basis_points: String(Math.round(taxRate * 100)),
-          default_currency_code: saleCurrencyCode,
+          default_currency_code: defaultCurrencyCode,
         },
       })
     } catch (error) {
@@ -940,11 +1078,17 @@ function App() {
     }
   }
 
-  const createSale = async (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault()
+  const createSale = async () => {
     if (saleSubmitting) return
     setInventoryError('')
-    if (!saleCart.length) return
+    if (!saleCart.length || !activeSaleDraft) return
+    if (saleCart.some((line) => {
+      const product = products.find((entry) => entry.id === line.productId)
+      return !product || line.quantity < 1 || line.quantity * line.baseUnitsPerUnit > product.availableUnits
+    })) {
+      setInventoryError(t('noStockAvailable'))
+      return
+    }
     if (paymentTotalMinor < invoiceTotalMinor || invoiceTotalMinor <= 0) {
       setInventoryError(t('paymentRequired'))
       return
@@ -969,12 +1113,16 @@ function App() {
     setSaleSubmitting(true)
     let createdSale: { id: number }
     try {
-      createdSale = await invoke<{ id: number }>('create_sale', {
+      await flushSaleDraft()
+      createdSale = await invoke<{ id: number }>('create_sale_with_units', {
+        draftId: activeSaleDraft.id,
         customerId: saleCustomerId ? Number(saleCustomerId) : null,
-        items: saleCart.map(({ productId, quantity, discountBasisPoints }) => ({
+        items: saleCart.map(({ productId, saleUnitId, quantity, discountType, discountValue }) => ({
           productId,
+          saleUnitId,
           quantity,
-          discountBasisPoints,
+          discountType,
+          discountValue,
         })),
         status: 'paid',
         payments,
@@ -986,16 +1134,19 @@ function App() {
       setSaleSubmitting(false)
       return
     }
+    setPaymentDialogOpen(false)
     setSaleReceipt(null)
-    setSaleCart([])
-    setPaymentAmounts({ cash: '', card: '', bank_transfer: '' })
-    setPaymentMethod('cash')
-    setSaleCustomerId('')
+    setBatchBalancesByProduct({})
+    setPaymentInputValues((current) => {
+      const remaining = { ...current }
+      delete remaining[activeSaleDraft.id]
+      return remaining
+    })
     setQuickCustomerOpen(false)
     setSaleSearch('')
     setSaleBarcode('')
     setSelectedSaleProductId(null)
-    setSaleStartedAt(new Date())
+    await finishDraft(activeSaleDraft.id, defaultCurrencyCode)
     setSaleSubmitting(false)
     await Promise.all([
       refreshDashboard(),
@@ -1069,6 +1220,7 @@ function App() {
     }
     addToSaleCart(product.id)
     setSaleBarcode('')
+    saleSearchRef.current?.focus()
   }
 
   function removeSaleItem(productId: number) {
@@ -1078,39 +1230,125 @@ function App() {
   }
 
   function clearSaleInvoice() {
-    setSaleCart([])
-    setSaleCustomerId('')
-    setPaymentAmounts({ cash: '', card: '', bank_transfer: '' })
-    setPaymentMethod('cash')
+    updateActiveDraft((draft) => ({
+      ...draft,
+      items: [],
+      customerId: null,
+      note: '',
+      paymentMethod: 'cash',
+      cashPaidMinor: 0,
+      cardPaidMinor: 0,
+      bankTransferPaidMinor: 0,
+    }))
+    if (activeSaleDraft) {
+      setPaymentInputValues((current) => {
+        const remaining = { ...current }
+        delete remaining[activeSaleDraft.id]
+        return remaining
+      })
+    }
     setSaleReceipt(null)
     setQuickCustomerOpen(false)
     setSaleSearch('')
     setSaleBarcode('')
     setSelectedSaleProductId(null)
-    setSaleStartedAt(new Date())
     setClearInvoiceOpen(false)
   }
 
   function addToSaleCart(productId: number) {
     setSaleReceipt(null)
+    if (!activeSaleDraft) {
+      setInventoryError(t('loading'))
+      return
+    }
     const product = products.find((entry) => entry.id === productId)
     if (!product) return
     if (!product.availableUnits) {
       setInventoryError(t('noStockAvailable'))
       return
     }
-    if (!product.salePriceMinor) {
+    const baseUnit = product.saleUnits?.find((unit) => unit.isBaseUnit)
+    if (!baseUnit || !baseUnit.salePriceMinor) {
       setInventoryError(t('setProductPrice'))
       return
     }
-    const existing = saleCart.find((line) => line.productId === productId)
-    if (existing && existing.quantity >= product.availableUnits) {
+    void loadProductBatches(productId).catch((error: unknown) => {
+      setInventoryError(error instanceof Error ? error.message : String(error))
+    })
+    const existing = saleCart.find((line) => line.productId === productId && line.saleUnitId === baseUnit.id)
+    if (existing && (existing.quantity + 1) * baseUnit.baseUnitsPerUnit > product.availableUnits) {
       setInventoryError(t('noStockAvailable'))
       return
     }
     setSaleCart((current) => existing
-      ? current.map((line) => line.productId === productId ? { ...line, quantity: line.quantity + 1 } : line)
-      : [...current, { productId, quantity: 1, discountBasisPoints: 0 }])
+      ? current.map((line) => line.productId === productId && line.saleUnitId === baseUnit.id ? { ...line, quantity: line.quantity + 1, soldQuantity: line.quantity + 1 } : line)
+      : [...current, {
+        productId,
+        saleUnitId: baseUnit.id,
+        quantity: 1,
+        soldQuantity: 1,
+        baseUnitsPerUnit: baseUnit.baseUnitsPerUnit,
+        unitPriceMinor: baseUnit.salePriceMinor,
+        discountType: 'percent',
+        discountValue: 0,
+        discountBasisPoints: 0,
+      }])
+  }
+
+  function updateSaleQuantity(productId: number, quantity: number) {
+    setSaleCart((current) => current.map((line) => line.productId === productId
+      ? { ...line, quantity, soldQuantity: quantity }
+      : line))
+  }
+  useEffect(() => {
+    saleShortcutActionsRef.current = {
+      startNewDraft: () => { void startNewSaleDraft() },
+      updateQuantity: updateSaleQuantity,
+      cart: saleCart,
+    }
+  })
+
+  function changeSaleUnit(productId: number, saleUnitId: number) {
+    const product = products.find((entry) => entry.id === productId)
+    const unit = product?.saleUnits?.find((entry) => entry.id === saleUnitId)
+    if (!product || !unit) return
+    if (unit.baseUnitsPerUnit > product.availableUnits) {
+      setInventoryError(t('noStockAvailable'))
+      return
+    }
+    setSaleCart((current) => current.map((line) => line.productId === productId
+      ? {
+        ...line,
+        saleUnitId,
+        soldQuantity: 1,
+        quantity: 1,
+        baseUnitsPerUnit: unit.baseUnitsPerUnit,
+        unitPriceMinor: unit.salePriceMinor,
+      }
+      : line))
+  }
+
+  function changeSaleDiscount(
+    productId: number,
+    discountType: 'percent' | 'amount',
+    value: string,
+  ) {
+    const parsedValue = Number(value) || 0
+    const discountValue = discountType === 'percent'
+      ? Math.max(0, Math.min(10000, Math.round(parsedValue * 100)))
+      : Math.max(0, Math.round(parsedValue * (10 ** invoiceCurrencyExponent)))
+    setSaleCart((current) => current.map((line) => line.productId === productId
+      ? {
+        ...line,
+        discountType,
+        discountValue: discountType === 'amount'
+          ? Math.min(line.quantity * line.unitPriceMinor, Math.round(
+            discountValue * 100 / (10 ** invoiceCurrencyExponent) * exchangeRateScaled / 1_000_000_000,
+          ))
+          : discountValue,
+        discountBasisPoints: discountType === 'percent' ? discountValue : 0,
+      }
+      : line))
   }
 
   async function saveProductPrice(productId: number) {
@@ -1120,6 +1358,63 @@ function App() {
         productId,
         salePriceMinor: Math.round(Number(productPrices[productId]) * 100),
       })
+      await refreshProducts()
+    } catch (error) {
+      setInventoryError(error instanceof Error ? error.message : String(error))
+    }
+  }
+
+  function openSaleUnitEditor(product: ProductSummary, unitId?: number) {
+    const unit = unitId === undefined ? undefined : product.saleUnits?.find((entry) => entry.id === unitId)
+    setSaleUnitEditorProductId(product.id)
+    setSaleUnitEditingId(unit?.id ?? null)
+    setSaleUnitName(unit?.name ?? '')
+    setSaleUnitBaseUnits(String(unit?.baseUnitsPerUnit ?? 2))
+    setSaleUnitPrice(unit ? (unit.salePriceMinor / 100).toFixed(2) : '')
+    setInventoryError('')
+  }
+
+  async function saveSaleUnit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    if (saleUnitEditorProductId === null || saleUnitSaving) return
+    const baseUnitsPerUnit = Number(saleUnitBaseUnits)
+    const salePriceMinor = Math.round(Number(saleUnitPrice) * 100)
+    if (!Number.isSafeInteger(baseUnitsPerUnit) || baseUnitsPerUnit < 2
+      || !Number.isSafeInteger(salePriceMinor) || salePriceMinor < 1
+      || !saleUnitName.trim() || saleUnitName.trim().length > 40) {
+      setInventoryError(t('invalidSaleUnit'))
+      return
+    }
+
+    setSaleUnitSaving(true)
+    setInventoryError('')
+    try {
+      const savedId = await invoke<number>('save_product_sale_unit', {
+        productId: saleUnitEditorProductId,
+        saleUnitId: saleUnitEditingId,
+        name: saleUnitName,
+        baseUnitsPerUnit,
+        salePriceMinor,
+      })
+      await refreshProducts()
+      setSaleUnitEditingId(savedId)
+    } catch (error) {
+      setInventoryError(error instanceof Error ? error.message : String(error))
+    } finally {
+      setSaleUnitSaving(false)
+    }
+  }
+
+  async function saveProductCategory(productId: number) {
+    const category = productCategories[productId] ?? ''
+    if (category.length > 100) {
+      setInventoryError(t('invalidProductCategory'))
+      return
+    }
+    setInventoryError('')
+    try {
+      await invoke('update_product_category', { productId, category })
+      setProductCategories((current) => ({ ...current, [productId]: category.trim() }))
       await refreshProducts()
     } catch (error) {
       setInventoryError(error instanceof Error ? error.message : String(error))
@@ -1201,6 +1496,7 @@ function App() {
         nameAr: productNameAr,
         nameEn: productNameEn,
         baseUnit,
+        category: productCategory.trim() || null,
         reorderLevelUnits: Number(reorderLevel),
         salePriceMinor: Math.round(Number(productSalePrice) * 100),
       })
@@ -1209,6 +1505,7 @@ function App() {
       setProductNameEn('')
       setBaseUnit('')
       setProductBarcode('')
+      setProductCategory('')
       setReorderLevel('0')
       setProductSalePrice('')
       await refreshProducts()
@@ -1259,7 +1556,7 @@ function App() {
   if (reportPeriod === '7d') reportStartDate.setDate(reportStartDate.getDate() - 6)
   if (reportPeriod === '30d') reportStartDate.setDate(reportStartDate.getDate() - 29)
   const filteredReportSales = sales.filter((sale) => {
-    if (sale.currencyCode !== saleCurrencyCode) return false
+    if (sale.currencyCode !== defaultCurrencyCode) return false
     if (reportPeriod !== 'all' && new Date(sale.soldAt).getTime() < reportStartDate.getTime()) return false
     const query = reportSearch.trim().toLocaleLowerCase()
     return !query || [sale.invoiceNumber, sale.customerName ?? ''].some((value) => value.toLocaleLowerCase().includes(query))
@@ -1431,10 +1728,13 @@ function App() {
             </button>
           </div>
         </header>
-        {inventoryError && (
+        {(inventoryError || saleDraftError) && (
           <div className="page-content page-error" role="alert">
-            <span>{inventoryError}</span>
-            <button type="button" className="text-button" onClick={() => setInventoryError('')}>{t('dismiss')}</button>
+            <span>{inventoryError || saleDraftError}</span>
+            <button type="button" className="text-button" onClick={() => {
+              setInventoryError('')
+              clearSaleDraftError()
+            }}>{t('dismiss')}</button>
           </div>
         )}
 
@@ -1843,6 +2143,10 @@ function App() {
                   <input value={baseUnit} onChange={(event) => setBaseUnit(event.target.value)} required />
                 </label>
                 <label>
+                  <span>{t('productCategory')}</span>
+                  <input maxLength={100} value={productCategory} onChange={(event) => setProductCategory(event.target.value)} />
+                </label>
+                <label>
                   <span>{t('barcodeOptional')}</span>
                   <input value={productBarcode} onChange={(event) => setProductBarcode(event.target.value)} />
                 </label>
@@ -1884,6 +2188,8 @@ function App() {
                         <th>{t('unitPrice')}</th>
                         <th>{t('availableUnits')}</th>
                         <th>{t('reorderLevel')}</th>
+                        <th>{t('productCategory')}</th>
+                        <th>{t('saleUnits')}</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -1925,11 +2231,32 @@ function App() {
                               <button className="text-button" type="button" onClick={() => void saveProductReorderLevel(product.id)}>{t('saveReorderLevel')}</button>
                             </div>
                           </td>
+                          <td>
+                            <div className="product-category-editor">
+                              <input
+                                aria-label={`${t('productCategory')} ${isArabic ? product.nameAr : product.nameEn}`}
+                                maxLength={100}
+                                value={productCategories[product.id] ?? product.category}
+                                onChange={(event) => setProductCategories((current) => ({ ...current, [product.id]: event.target.value }))}
+                              />
+                              <button className="text-button" type="button" onClick={() => void saveProductCategory(product.id)}>{t('saveCategory')}</button>
+                            </div>
+                          </td>
+                          <td>
+                            <button
+                              className="text-button sale-units-open-button"
+                              type="button"
+                              aria-label={`${t('manageSaleUnits')} ${isArabic ? product.nameAr : product.nameEn}`}
+                              onClick={() => openSaleUnitEditor(product)}
+                            >
+                              {t('manageSaleUnits')} ({(product.saleUnits ?? []).filter((unit) => !unit.isBaseUnit).length})
+                            </button>
+                          </td>
                         </tr>
                       ))}
                       {products.length === 0 && !inventoryLoading && (
                         <tr>
-                          <td colSpan={5} className="inventory-empty">{t('noProducts')}</td>
+                          <td colSpan={8} className="inventory-empty">{t('noProducts')}</td>
                         </tr>
                       )}
                     </tbody>
@@ -1968,6 +2295,67 @@ function App() {
                 )}
               </section>
             </div>
+            {saleUnitEditorProductId !== null && saleUnitEditorProduct && (
+              <div className="pos-modal-backdrop" role="presentation" onMouseDown={(event) => {
+                if (event.target === event.currentTarget && !saleUnitSaving) setSaleUnitEditorProductId(null)
+              }}>
+                <section
+                  className="pos-confirm-dialog pos-sale-unit-dialog"
+                  role="dialog"
+                  aria-modal="true"
+                  aria-labelledby="sale-unit-dialog-title"
+                  onKeyDown={(event) => {
+                    if (event.key === 'Escape' && !saleUnitSaving) setSaleUnitEditorProductId(null)
+                  }}
+                >
+                  <div className="panel-heading">
+                    <div>
+                      <h3 id="sale-unit-dialog-title">{t('saleUnits')}</h3>
+                      <p>{isArabic ? saleUnitEditorProduct.nameAr : saleUnitEditorProduct.nameEn}</p>
+                    </div>
+                    <button className="icon-button" type="button" aria-label={t('close')} onClick={() => setSaleUnitEditorProductId(null)} disabled={saleUnitSaving}><X size={17} /></button>
+                  </div>
+                  <div className="sale-unit-list">
+                    {(saleUnitEditorProduct.saleUnits ?? []).filter((unit) => !unit.isBaseUnit).map((unit) => (
+                      <button
+                        key={unit.id}
+                        className={`sale-unit-option ${unit.id === saleUnitEditingId ? 'is-selected' : ''}`}
+                        type="button"
+                        aria-label={`${t('editSaleUnit')} ${unit.name}`}
+                        onClick={() => openSaleUnitEditor(saleUnitEditorProduct, unit.id)}
+                      >
+                        <strong>{unit.name}</strong>
+                        <span>{unit.baseUnitsPerUnit} × {formatInvoiceMoney(unit.salePriceMinor)}</span>
+                      </button>
+                    ))}
+                    {(saleUnitEditorProduct.saleUnits ?? []).every((unit) => unit.isBaseUnit) && (
+                      <p className="inventory-empty">{t('noAlternateSaleUnits')}</p>
+                    )}
+                  </div>
+                  <button className="text-button sale-unit-add-button" type="button" onClick={() => openSaleUnitEditor(saleUnitEditorProduct)}>
+                    <Plus size={16} />{t('addSaleUnit')}
+                  </button>
+                  <form className="sale-unit-form" onSubmit={(event) => void saveSaleUnit(event)}>
+                    <label>
+                      <span>{t('saleUnitName')}</span>
+                      <input autoFocus maxLength={40} value={saleUnitName} onChange={(event) => setSaleUnitName(event.target.value)} required />
+                    </label>
+                    <label>
+                      <span>{t('baseUnitsPerSaleUnit')}</span>
+                      <input type="number" min="2" step="1" value={saleUnitBaseUnits} onChange={(event) => setSaleUnitBaseUnits(event.target.value)} required />
+                    </label>
+                    <label>
+                      <span>{t('saleUnitPrice')}</span>
+                      <input type="number" min="0.01" step="0.01" value={saleUnitPrice} onChange={(event) => setSaleUnitPrice(event.target.value)} required />
+                    </label>
+                    {inventoryError && <p className="page-error" role="alert">{inventoryError}</p>}
+                    <button className="primary-button" type="submit" disabled={saleUnitSaving}>
+                      {saleUnitSaving ? t('loading') : t('saveSaleUnit')}
+                    </button>
+                  </form>
+                </section>
+              </div>
+            )}
           </section>
         ) : activePage === 'customers' ? (
           <section className="page-content inventory-page">
@@ -2095,9 +2483,9 @@ function App() {
                 <label>
                   <span>{t('defaultCurrency')}</span>
                   <select
-                    value={saleCurrencyCode}
+                    value={defaultCurrencyCode}
                     onChange={(event) => {
-                      setSaleCurrencyCode(event.target.value)
+                      applyDefaultCurrency(event.target.value)
                     }}
                   >
                     {currencies.map((currency) => (
@@ -2278,7 +2666,7 @@ function App() {
                     <Search size={17} />
                     <input aria-label={t('searchInvoices')} value={reportSearch} onChange={(event) => setReportSearch(event.target.value)} placeholder={t('searchInvoices')} />
                   </label>
-                  <span className="report-currency-note">{t('reportCurrencyNote', { currency: saleCurrencyCode })}</span>
+                  <span className="report-currency-note">{t('reportCurrencyNote', { currency: defaultCurrencyCode })}</span>
                 </div>
                 <div className="stats-grid report-stats">
                   <article className="stat-card"><p>{t('paidSalesTotal')}</p><strong className="stat-value">{formatMoney(paidReportTotal)}</strong><span className="stat-note">{t('selectedPeriod')}</span></article>
@@ -2302,6 +2690,12 @@ function App() {
                     <div className="pos-overview-metric pos-overview-total"><span>{t('posCurrentTotal')}</span><strong>{formatInvoiceMoney(invoiceTotalMinor)}</strong></div>
                   </div>
                 </section>
+                <InvoiceTabs
+                  drafts={saleDrafts}
+                  activeDraftId={activeDraftId}
+                  onSelect={selectSaleDraft}
+                  onCreate={() => void startNewSaleDraft()}
+                />
                 <div className="pos-layout">
                   <section className="panel pos-catalog">
                     <div className="panel-heading">
@@ -2320,135 +2714,56 @@ function App() {
                         </button>
                       </div>
                     </div>
-                    <label className="product-search sale-search">
-                      <Search size={18} />
-                      <input
-                        ref={saleSearchRef}
-                        aria-label={t('searchProducts')}
-                        value={saleSearch}
-                        onChange={(event) => setSaleSearch(event.target.value)}
-                        onKeyDown={(event) => {
-                          if (event.key !== 'Enter') return
-                          event.preventDefault()
-                          const query = normalizeProductSearch(saleSearch)
-                          const exact = products.find((product) =>
-                            normalizeProductSearch(product.barcode ?? '') === query
-                            || normalizeProductSearch(product.sku) === query)
-                          const matches = products.filter((product) =>
-                            [product.nameAr, product.nameEn, product.sku, product.barcode ?? '']
-                              .some((value) => normalizeProductSearch(value).includes(query)))
-                          const selectedProduct = exact ?? (matches.length === 1 ? matches[0] : undefined)
-                          if (selectedProduct) {
-                            addToSaleCart(selectedProduct.id)
-                            setSaleSearch('')
-                          }
-                        }}
-                        placeholder={t('searchProducts')}
-                      />
-                      <kbd>F2</kbd>
-                    </label>
-                    <label className="product-search barcode-search">
-                      <ScanLine size={18} />
-                      <input
-                        ref={saleBarcodeRef}
-                        aria-label={t('scanBarcode')}
-                        value={saleBarcode}
-                        onChange={(event) => setSaleBarcode(event.target.value)}
-                        onKeyDown={(event) => {
-                          if (event.key === 'Enter') {
-                            event.preventDefault()
-                            addScannedBarcode(saleBarcode)
-                          }
-                        }}
-                        placeholder={t('scanBarcode')}
-                      />
-                      <kbd>F6</kbd>
-                    </label>
-                    <div className="pos-stock-filters" role="group" aria-label={t('posStockFilters')}>
-                      <button type="button" className={saleStockFilter === 'all' ? 'pos-stock-filter is-active' : 'pos-stock-filter'} aria-pressed={saleStockFilter === 'all'} onClick={() => setSaleStockFilter('all')}>
-                        {t('posFilterAll')} <span>{products.length}</span>
-                      </button>
-                      <button type="button" className={saleStockFilter === 'available' ? 'pos-stock-filter is-active' : 'pos-stock-filter'} aria-pressed={saleStockFilter === 'available'} onClick={() => setSaleStockFilter('available')}>
-                        {t('posFilterAvailable')} <span>{saleAvailableCount}</span>
-                      </button>
-                      <button type="button" className={saleStockFilter === 'low' ? 'pos-stock-filter is-active' : 'pos-stock-filter'} aria-pressed={saleStockFilter === 'low'} onClick={() => setSaleStockFilter('low')}>
-                        {t('posFilterLowStock')} <span>{saleLowStockCount}</span>
-                      </button>
-                      <button type="button" className={saleStockFilter === 'out' ? 'pos-stock-filter is-active' : 'pos-stock-filter'} aria-pressed={saleStockFilter === 'out'} onClick={() => setSaleStockFilter('out')}>
-                        {t('posFilterOutOfStock')} <span>{saleOutOfStockCount}</span>
-                      </button>
-                      <span className="pos-result-count">{t('posShowingProducts', { count: saleCatalogProducts.length })}</span>
-                    </div>
-                    <div className="pos-product-grid" role="list" aria-label={t('posProducts')}>
-                      {saleCatalogProducts.map((product) => {
-                        const productName = isArabic ? product.nameAr : product.nameEn
-                        const isLowStock = product.availableUnits <= product.reorderLevelUnits
-                        const isOutOfStock = product.availableUnits === 0
-                        return (
-                          <article className="pos-product-card" key={product.id} role="listitem">
-                            <div className="pos-product-card-top">
-                              <div className="pos-product-identity">
-                                <h4>{productName}</h4>
-                                <span>{product.sku}</span>
-                              </div>
-                              <span className={isOutOfStock ? 'pos-stock-state is-out' : isLowStock ? 'pos-stock-state is-low' : 'pos-stock-state is-available'}>
-                                {isOutOfStock ? t('posFilterOutOfStock') : isLowStock ? t('stockLow') : t('posFilterAvailable')}
-                              </span>
-                            </div>
-                            <div className="pos-product-card-price">{formatInvoiceMoney(product.salePriceMinor)}</div>
-                            <div className="pos-product-card-details">
-                              <div><span>{t('barcode')}</span><strong>{product.barcode || '—'}</strong></div>
-                              <div><span>{t('availableUnits')}</span><strong className={isLowStock ? 'stock-low' : 'stock-ok'}>{product.availableUnits}</strong></div>
-                              <div><span>{t('nearestExpiry')}</span><strong>{product.nearestExpiryDate || '—'}</strong></div>
-                            </div>
-                            <button
-                              className="pos-product-add"
-                              type="button"
-                              aria-label={`${t('addToInvoice')} ${productName}`}
-                              onClick={() => addToSaleCart(product.id)}
-                              disabled={isOutOfStock || product.salePriceMinor <= 0}
-                            >
-                              <Plus size={16} />
-                              <span>{t('addToInvoice')}</span>
-                            </button>
-                          </article>
-                        )
-                      })}
-                      {products.length === 0 && !inventoryLoading && (
-                        <div className="pos-catalog-empty">{t('noProducts')}</div>
-                      )}
-                      {products.length > 0 && saleCatalogProducts.length === 0 && (
-                        <div className="pos-catalog-empty">{t('noSearchResults')}</div>
-                      )}
-                    </div>
+                    <ProductSearch
+                      products={products}
+                      search={saleSearch}
+                      barcode={saleBarcode}
+                      searchRef={saleSearchRef}
+                      barcodeRef={saleBarcodeRef}
+                      onSearchChange={setSaleSearch}
+                      onBarcodeChange={setSaleBarcode}
+                      onAddProduct={addToSaleCart}
+                      onScan={addScannedBarcode}
+                    />
+                    <ProductGrid
+                      products={saleCatalogProducts}
+                      totalProducts={products.length}
+                      availableCount={saleAvailableCount}
+                      lowStockCount={saleLowStockCount}
+                      outOfStockCount={saleOutOfStockCount}
+                      categories={saleCategories}
+                      category={saleCategory}
+                      filter={saleStockFilter}
+                      inventoryLoading={inventoryLoading || saleDraftsLoading}
+                      isArabic={isArabic}
+                      formatPrice={formatInvoiceMoney}
+                      onFilterChange={setSaleStockFilter}
+                      onCategoryChange={setSaleCategory}
+                      onAddProduct={addToSaleCart}
+                      onShowProductInfo={(productId) => void showProductBatches(productId)}
+                    />
                   </section>
-                  <form ref={saleFormRef} className="panel pos-cart" onSubmit={createSale}>
-                    <div className="panel-heading pos-invoice-heading">
-                      <div><h3>{t('currentSale')}</h3><p>{t('invoiceNumberPending')}</p></div>
-                      <button className="text-button clear-invoice-button" type="button" onClick={() => setClearInvoiceOpen(true)} disabled={!saleCart.length}>
-                        <Trash2 size={16} />{t('clearInvoice')}
-                      </button>
-                    </div>
-                    <div className="invoice-meta">
-                      <div><span>{t('invoice')}</span><strong>—</strong></div>
-                      <div><span>{t('invoiceTime')}</span><strong>{saleStartedAt.toLocaleString(isArabic ? 'ar' : 'en')}</strong></div>
-                    </div>
-                    <div className="customer-picker">
-                      <label>
-                        <span>{t('customer')}</span>
-                        <select ref={saleCustomerRef} value={saleCustomerId} onChange={(event) => setSaleCustomerId(event.target.value)}>
-                          <option value="">{t('cashCustomer')}</option>
-                          {customers.map((customer) => <option key={customer.id} value={customer.id}>{customer.name}</option>)}
-                        </select>
-                      </label>
-                      <button className="icon-button" type="button" aria-label={t('addCustomerInline')} onClick={() => {
-                        setQuickCustomerOpen(true)
-                        window.setTimeout(() => quickCustomerInputRef.current?.focus(), 0)
-                      }}>
-                        <UserRoundPlus size={18} />
-                      </button>
-                    </div>
-                    {quickCustomerOpen && (
+                  <InvoicePanel
+                    invoiceNumber={activeSaleDraft?.id ?? null}
+                    startedAt={saleStartedAt ? saleStartedAt.slice(0, 16).replace('T', ' ') : ''}
+                    customers={customers}
+                    customerRef={saleCustomerRef}
+                    customerId={saleCustomerId}
+                    note={activeSaleDraft?.note ?? ''}
+                    itemCount={saleCart.length}
+                    totalQuantity={saleCart.reduce((sum, line) => sum + line.quantity, 0)}
+                    subtotal={formatInvoiceMoney(invoiceAmounts.subtotal)}
+                    discount={formatInvoiceMoney(invoiceAmounts.discount)}
+                    tax={formatInvoiceMoney(invoiceTaxMinor)}
+                    taxRate={`${(taxRateBasisPoints / 100).toFixed(2)}%`}
+                    total={formatCurrencyMinor(invoiceTotalMinor, saleCurrencyCode)}
+                    canClear={saleCart.length > 0}
+                    canHold={saleCart.length > 0}
+                    paymentDisabled={saleDraftsLoading || !saleCart.length || saleCart.some((line) => {
+                      const product = products.find((entry) => entry.id === line.productId)
+                      return !product || line.quantity < 1 || line.quantity * line.baseUnitsPerUnit > product.availableUnits
+                    })}
+                    customerExtra={quickCustomerOpen && (
                       <div className="quick-customer-form">
                         <label><span>{t('customerName')}</span><input ref={quickCustomerInputRef} value={quickCustomerName} onChange={(event) => setQuickCustomerName(event.target.value)} required /></label>
                         <label><span>{t('phone')}</span><input type="tel" value={quickCustomerPhone} onChange={(event) => setQuickCustomerPhone(event.target.value)} /></label>
@@ -2458,163 +2773,88 @@ function App() {
                         </div>
                       </div>
                     )}
-                    <div className="pos-cart-items table-scroll">
-                      <table className="invoice-items-table">
-                        <thead>
-                          <tr><th>{t('product')}</th><th>{t('quantityUnits')}</th><th>{t('unitPrice')}</th><th>{t('lineDiscount')}</th><th>{t('amount')}</th><th aria-label={t('removeItem')} /></tr>
-                        </thead>
-                        <tbody>
-                          {saleCart.map((line) => {
-                            const product = products.find((entry) => entry.id === line.productId)
-                            if (!product) return null
-                            const lineSubtotal = line.quantity * product.salePriceMinor
-                            const lineDiscount = Math.round(lineSubtotal * line.discountBasisPoints / 10000)
-                            const lineTotal = lineSubtotal - lineDiscount
-                            return (
-                              <tr
-                                key={line.productId}
-                                className={selectedSaleProductId === line.productId ? 'is-selected' : ''}
-                                onClick={() => setSelectedSaleProductId(line.productId)}
-                                onFocus={() => setSelectedSaleProductId(line.productId)}
-                              >
-                                <td><strong>{isArabic ? product.nameAr : product.nameEn}</strong><small>{product.sku}</small></td>
-                                <td>
-                                  <input
-                                    className="quantity-input"
-                                    aria-label={`${t('quantityUnits')} ${isArabic ? product.nameAr : product.nameEn}`}
-                                    type="number"
-                                    min="1"
-                                    max={product.availableUnits}
-                                    step="1"
-                                    value={line.quantity}
-                                    onChange={(event) => {
-                                      const quantity = event.target.value === ''
-                                        ? 0
-                                        : Math.min(product.availableUnits, Math.max(0, Number(event.target.value) || 0))
-                                      setSaleCart((current) => current.map((entry) => entry.productId === line.productId ? { ...entry, quantity } : entry))
-                                    }}
-                                    onBlur={() => {
-                                      if (line.quantity < 1) setSaleCart((current) => current.map((entry) => entry.productId === line.productId ? { ...entry, quantity: 1 } : entry))
-                                    }}
-                                  />
-                                  <span className="quantity-stepper">
-                                    <button
-                                      className="icon-button"
-                                      type="button"
-                                      aria-label={`${t('decreaseQuantity')} ${isArabic ? product.nameAr : product.nameEn}`}
-                                      disabled={line.quantity <= 1}
-                                      onClick={() => setSaleCart((current) => current.map((entry) => entry.productId === line.productId ? { ...entry, quantity: Math.max(1, entry.quantity - 1) } : entry))}
-                                    >
-                                      <Minus size={13} />
-                                    </button>
-                                    <button
-                                      className="icon-button"
-                                      type="button"
-                                      aria-label={`${t('increaseQuantity')} ${isArabic ? product.nameAr : product.nameEn}`}
-                                      disabled={line.quantity >= product.availableUnits}
-                                      onClick={() => setSaleCart((current) => current.map((entry) => entry.productId === line.productId ? { ...entry, quantity: Math.min(product.availableUnits, entry.quantity + 1) } : entry))}
-                                    >
-                                      <Plus size={13} />
-                                    </button>
-                                  </span>
-                                </td>
-                                <td>{formatInvoiceMoney(product.salePriceMinor)}</td>
-                                <td>
-                                  <input
-                                    className="discount-input"
-                                    aria-label={`${t('lineDiscount')} ${isArabic ? product.nameAr : product.nameEn}`}
-                                    type="number"
-                                    min="0"
-                                    max="99.99"
-                                    step="0.01"
-                                    value={(line.discountBasisPoints / 100).toString()}
-                                    onChange={(event) => {
-                                      const discountBasisPoints = Math.max(0, Math.min(9999, Math.round((Number(event.target.value) || 0) * 100)))
-                                      setSaleCart((current) => current.map((entry) => entry.productId === line.productId
-                                        ? { ...entry, discountBasisPoints }
-                                        : entry))
-                                    }}
-                                  />
-                                </td>
-                                <td><strong>{formatInvoiceMoney(lineTotal)}</strong></td>
-                                <td>
-                                  <button className="icon-button remove-item-button" type="button" aria-label={`${t('removeItem')} ${isArabic ? product.nameAr : product.nameEn}`} onClick={() => setRemoveProductId(product.id)}>
-                                    <X size={15} />
-                                  </button>
-                                </td>
+                    onCustomerChange={setSaleCustomerId}
+                    onCreateCustomer={() => {
+                      setQuickCustomerOpen(true)
+                      window.setTimeout(() => quickCustomerInputRef.current?.focus(), 0)
+                    }}
+                    onNoteChange={(note) => updateActiveDraft((draft) => ({ ...draft, note }))}
+                    onClear={() => setClearInvoiceOpen(true)}
+                    onHold={() => void holdSaleInvoice()}
+                    onPayment={() => setPaymentDialogOpen(true)}
+                  >
+                    <InvoiceItems
+                      key={activeSaleDraft?.id}
+                      items={saleCart}
+                      products={products}
+                      batchesByProduct={batchBalancesByProduct}
+                      selectedProductId={selectedSaleProductId}
+                      isArabic={isArabic}
+                      formatMoney={formatInvoiceMoney}
+                      formatDiscountAmount={(amountMinor) => (
+                        convertInvoiceMinor(amountMinor, saleCurrencyCode) / (10 ** invoiceCurrencyExponent)
+                      ).toFixed(invoiceCurrencyExponent)}
+                      isNearExpiry={(date) => {
+                        const days = daysUntilExpiry(date)
+                        return days >= 0 && days <= 90
+                      }}
+                      onSelect={setSelectedSaleProductId}
+                      onQuantityChange={updateSaleQuantity}
+                      onUnitChange={changeSaleUnit}
+                      onDiscountChange={changeSaleDiscount}
+                      onRemove={setRemoveProductId}
+                    />
+                  </InvoicePanel>
+                </div>
+                <PaymentDialog
+                  open={paymentDialogOpen}
+                  currencyCode={saleCurrencyCode}
+                  currencyName={new Intl.DisplayNames([isArabic ? 'ar' : 'en'], { type: 'currency' }).of(saleCurrencyCode) ?? saleCurrencyCode}
+                  paymentMethod={paymentMethod}
+                  paymentAmounts={paymentAmounts}
+                  invoiceTotalMinor={invoiceTotalMinor}
+                  paymentTotalMinor={paymentTotalMinor}
+                  remainingMinor={remainingMinor}
+                  changeMinor={changeMinor}
+                  currencyExponent={invoiceCurrencyExponent}
+                  submitting={saleSubmitting}
+                  onClose={() => setPaymentDialogOpen(false)}
+                  onMethodChange={setPaymentMethod}
+                  onAmountChange={setPaymentAmounts}
+                  onComplete={() => void createSale()}
+                  formatMinor={formatCurrencyMinor}
+                />
+                {batchInfoProductId !== null && (
+                  <div className="pos-modal-backdrop" role="presentation" onMouseDown={(event) => {
+                    if (event.target === event.currentTarget) setBatchInfoProductId(null)
+                  }}>
+                    <section className="pos-confirm-dialog pos-batch-info-dialog" role="dialog" aria-modal="true" aria-labelledby="product-batch-info-title">
+                      <div className="panel-heading">
+                        <div>
+                          <h3 id="product-batch-info-title">{t('productBatchInfo')}</h3>
+                          <p>{batchInfoProduct ? (isArabic ? batchInfoProduct.nameAr : batchInfoProduct.nameEn) : ''}</p>
+                        </div>
+                        <button className="icon-button" type="button" aria-label={t('close')} onClick={() => setBatchInfoProductId(null)}><X size={17} /></button>
+                      </div>
+                      <div className="table-scroll">
+                        <table>
+                          <thead><tr><th>{t('batchNumber')}</th><th>{t('expiryDate')}</th><th>{t('availableUnits')}</th><th>{t('status')}</th></tr></thead>
+                          <tbody>
+                            {(batchBalanceResult?.productId === String(batchInfoProductId) ? batchBalanceResult.balances : []).map((batch) => (
+                              <tr key={batch.batchId}>
+                                <td>{batch.batchNumber}</td><td>{batch.expiryDate}</td><td>{batch.availableUnits}</td>
+                                <td>{batch.isExpired ? t('expired') : t('valid')}</td>
                               </tr>
-                            )
-                          })}
-                          {saleCart.length === 0 && <tr><td colSpan={6} className="inventory-empty">{t('emptySaleCart')}</td></tr>}
-                        </tbody>
-                      </table>
-                    </div>
-                    <div className="invoice-summary">
-                      <div><span>{t('itemCount')}</span><strong>{saleCart.length}</strong></div>
-                      <div><span>{t('totalQuantity')}</span><strong>{saleCart.reduce((sum, line) => sum + line.quantity, 0)}</strong></div>
-                      <div><span>{t('subtotal')}</span><strong>{formatInvoiceMoney(invoiceAmounts.subtotal)}</strong></div>
-                      <div><span>{t('discounts')}</span><strong>{formatInvoiceMoney(invoiceAmounts.discount)}</strong></div>
-                      <div><span>{t('vat')} ({(taxRateBasisPoints / 100).toFixed(2)}%)</span><strong>{formatInvoiceMoney(invoiceTaxMinor)}</strong></div>
-                      <div className="invoice-grand-total"><span>{t('netTotal')}</span><strong>{formatCurrencyMinor(invoiceTotalMinor, saleCurrencyCode)}</strong></div>
-                    </div>
-                    <section className="payment-section" ref={paymentSectionRef} tabIndex={-1}>
-                      <div className="payment-heading"><h4>{t('paymentMethods')}</h4><kbd>F4</kbd></div>
-                      <div className="currency-settings">
-                        <div className="active-currency-display">
-                          <span>{t('currency')}</span>
-                          <strong>{saleCurrencyCode} · {new Intl.DisplayNames([isArabic ? 'ar' : 'en'], { type: 'currency' }).of(saleCurrencyCode) ?? saleCurrencyCode}</strong>
-                          <small>{t('currencyManagedInSettings')}</small>
-                        </div>
-                      </div>
-                      <div className="payment-methods">
-                        {(['cash', 'card', 'bank_transfer', 'mixed'] as PaymentMethod[]).map((method) => {
-                          const Icon = method === 'cash' ? DollarSign : method === 'card' ? CreditCard : method === 'bank_transfer' ? Landmark : ScanLine
-                          return (
-                            <button
-                              className={`payment-method ${paymentMethod === method ? 'is-active' : ''}`}
-                              type="button"
-                              key={method}
-                              aria-pressed={paymentMethod === method}
-                              onClick={() => setPaymentMethod(method)}
-                            >
-                              <Icon size={17} /><span>{t(method === 'bank_transfer' ? 'bankTransfer' : method === 'mixed' ? 'mixedPayment' : method)}</span>
-                            </button>
-                          )
-                        })}
-                      </div>
-                      {paymentMethod === 'mixed' ? (
-                        <div className="mixed-payment-fields">
-                          {paymentMethods.map((method) => (
-                            <label key={method}>
-                              <span>{t(method === 'bank_transfer' ? 'bankTransfer' : method)}</span>
-                              <input data-payment-field type="number" min="0" step="any" value={paymentAmounts[method]} onChange={(event) => setPaymentAmounts((current) => ({ ...current, [method]: event.target.value }))} />
-                            </label>
-                          ))}
-                        </div>
-                      ) : (
-                        <label className="payment-amount-field">
-                          <span>{t('paidAmount')}</span>
-                          <input
-                            type="number"
-                            data-payment-field
-                            min="0"
-                            step="any"
-                            value={paymentAmounts[paymentMethod]}
-                            placeholder={(invoiceTotalMinor / (10 ** invoiceCurrencyExponent)).toFixed(invoiceCurrencyExponent)}
-                            onChange={(event) => setPaymentAmounts((current) => ({ ...current, [paymentMethod]: event.target.value }))}
-                          />
-                        </label>
-                      )}
-                      <div className="payment-balance">
-                        <div><span>{t('remainingAmount')}</span><strong>{formatCurrencyMinor(remainingMinor, saleCurrencyCode)}</strong></div>
-                        <div><span>{t('changeDue')}</span><strong>{formatCurrencyMinor(changeMinor, saleCurrencyCode)}</strong></div>
+                            ))}
+                            {(batchBalanceResult?.productId === String(batchInfoProductId) ? batchBalanceResult.balances : []).length === 0 && (
+                              <tr><td colSpan={4} className="inventory-empty">{t('noBatchBalances')}</td></tr>
+                            )}
+                          </tbody>
+                        </table>
                       </div>
                     </section>
-                    <button className="primary-button complete-sale-button" type="submit" disabled={saleSubmitting || !saleCart.length || saleCart.some((line) => line.quantity < 1) || paymentTotalMinor < invoiceTotalMinor}>
-                      {saleSubmitting ? t('loading') : t('completeSale')}<span>F8</span>
-                    </button>
-                  </form>
-                </div>
+                  </div>
+                )}
                 {saleReceipt && (
                   <section className="panel receipt-panel">
                     <div className="receipt-actions">
@@ -2656,7 +2896,12 @@ function App() {
                           <tr key={`${item.productNameAr}-${index}`}>
                             <td>
                               <strong>{isArabic ? item.productNameAr : item.productNameEn}</strong>
-                              <small>{item.quantity} × {formatInvoiceMoney(item.unitPriceMinor, saleReceipt.currencyCode, saleReceipt.exchangeRateScaled)}</small>
+                              <small>{item.quantity} × {item.saleUnitName} · {formatInvoiceMoney(item.unitPriceMinor, saleReceipt.currencyCode, saleReceipt.exchangeRateScaled)}</small>
+                              {item.batches?.map((batch) => (
+                                <small key={`${batch.batchNumber}-${batch.expiryDate}`}>
+                                  {batch.batchNumber} · {batch.expiryDate} · {batch.units}
+                                </small>
+                              ))}
                             </td>
                             <td>{formatInvoiceMoney(item.discountMinor, saleReceipt.currencyCode, saleReceipt.exchangeRateScaled)}</td>
                             <td><strong>{formatInvoiceMoney(item.lineTotalMinor, saleReceipt.currencyCode, saleReceipt.exchangeRateScaled)}</strong></td>
@@ -2664,6 +2909,7 @@ function App() {
                         ))}</tbody>
                       </table></div>
                       <div className="receipt-totals">
+                        {saleReceipt.note && <p>{t('invoiceNote')}: {saleReceipt.note}</p>}
                         <p>{t('subtotal')}: {formatInvoiceMoney(saleReceipt.subtotalMinor, saleReceipt.currencyCode, saleReceipt.exchangeRateScaled)}</p>
                         <p>{t('discounts')}: {formatInvoiceMoney(saleReceipt.discountMinor, saleReceipt.currencyCode, saleReceipt.exchangeRateScaled)}</p>
                         <p>{t('vat')} ({(saleReceipt.taxRateBasisPoints / 100).toFixed(2)}%): {formatInvoiceMoney(saleReceipt.taxMinor, saleReceipt.currencyCode, saleReceipt.exchangeRateScaled)}</p>

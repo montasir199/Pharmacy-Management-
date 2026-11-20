@@ -34,6 +34,8 @@ pub(crate) fn migrations() -> Migrations<'static> {
         )),
         M::up(include_str!("../migrations/0005_pos_payments.sql")),
         M::up(include_str!("../migrations/0006_thermal_printing.sql")),
+        M::up(include_str!("../migrations/0007_pos_workflow.sql")),
+        M::up(include_str!("../migrations/0008_sale_invoice_note.sql")),
     ])
 }
 
@@ -140,6 +142,83 @@ mod tests {
     }
 
     #[test]
+    fn pos_migration_preserves_existing_products_and_invoice_quantities() {
+        let mut connection = Connection::open_in_memory().expect("open in-memory database");
+        migrations()
+            .to_version(&mut connection, 6)
+            .expect("apply existing migrations");
+        connection
+            .execute(
+                "INSERT INTO products (sku, name_ar, name_en, base_unit, sale_price_minor)
+                 VALUES ('MED-MIGRATION', 'دواء', 'Medicine', 'حبة', 250)",
+                [],
+            )
+            .expect("create pre-migration product");
+        connection
+            .execute(
+                "INSERT INTO sales
+                 (invoice_number, subtotal_minor, discount_minor, tax_minor, total_minor,
+                  status, currency_code, exchange_rate_scaled, tax_rate_basis_points)
+                 VALUES ('INV-MIGRATION', 1000, 0, 0, 1000, 'paid', 'SAR', 1000000000, 0)",
+                [],
+            )
+            .expect("create pre-migration sale");
+        connection
+            .execute(
+                "INSERT INTO sale_items
+                 (sale_id, product_id, quantity, unit_price_minor, line_total_minor, discount_minor)
+                 VALUES (1, 1, 4, 250, 1000, 0)",
+                [],
+            )
+            .expect("create pre-migration sale item");
+
+        migrations()
+            .to_latest(&mut connection)
+            .expect("apply POS migration");
+
+        let (category, unit_name, unit_price, unit_multiplier, sold_quantity): (
+            String,
+            String,
+            i64,
+            i64,
+            i64,
+        ) = connection
+            .query_row(
+                "SELECT products.category, product_sale_units.name,
+                        product_sale_units.sale_price_minor, product_sale_units.base_units_per_unit,
+                        sale_items.sold_quantity
+                 FROM products
+                 JOIN product_sale_units ON product_sale_units.product_id = products.id
+                 JOIN sale_items ON sale_items.product_id = products.id",
+                [],
+                |row| {
+                    Ok((
+                        row.get(0)?,
+                        row.get(1)?,
+                        row.get(2)?,
+                        row.get(3)?,
+                        row.get(4)?,
+                    ))
+                },
+            )
+            .expect("read migrated POS records");
+
+        assert_eq!(category, "");
+        assert_eq!(unit_name, "حبة");
+        assert_eq!(unit_price, 250);
+        assert_eq!(unit_multiplier, 1);
+        assert_eq!(sold_quantity, 4);
+        let migrated_note: String = connection
+            .query_row(
+                "SELECT note FROM sales WHERE invoice_number = 'INV-MIGRATION'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("read migrated sale note");
+        assert_eq!(migrated_note, "");
+    }
+
+    #[test]
     fn backs_up_an_existing_database_before_migrating_and_only_once() {
         let directory = tempfile::tempdir().expect("create temporary data directory");
         let database_path = directory.path().join(DATABASE_FILE);
@@ -205,7 +284,7 @@ mod tests {
         let connection =
             Connection::open(directory.path().join(DATABASE_FILE)).expect("create database file");
         connection
-            .pragma_update(None, "user_version", 7)
+            .pragma_update(None, "user_version", 9)
             .expect("set future schema version");
         drop(connection);
 
