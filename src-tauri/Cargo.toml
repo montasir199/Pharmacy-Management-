@@ -1,6 +1,6 @@
 [package]
 name = "pharmacy-management"
-version = "0.2.3"
+version = "0.2.4"
 description = "Offline desktop pharmacy management"
 authors = ["Pharmacy Management"]
 edition = "2021"
