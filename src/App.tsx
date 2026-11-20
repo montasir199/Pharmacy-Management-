@@ -1878,6 +1878,7 @@ function App() {
                 <label>
                   <span>{t('defaultExchangeRate')}</span>
                   <input
+                    aria-label={t('defaultExchangeRate')}
                     type="number"
                     min={saleCurrencyCode === 'SAR' ? '1' : '0.000000001'}
                     step="any"
