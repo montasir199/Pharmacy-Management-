@@ -620,6 +620,10 @@ const resources = {
       paymentMethods: 'Payment methods',
       invoiceSavedPrintFailed: 'Invoice saved, but its details could not be loaded.',
       lowStockWarning: 'Remaining stock is low',
+      inventoryAttention: 'Inventory needs attention',
+      inventoryAttentionDescription: 'Review low-stock and near-expiry products before the next sale.',
+      dashboardLowStockCount: '{{count}} products at or below reorder level',
+      dashboardExpiringCount: '{{count}} products expiring within 90 days',
     },
   },
 } as const
