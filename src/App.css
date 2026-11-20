@@ -2663,3 +2663,27 @@ button:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-vis
 .updater-settings-panel .panel-heading { align-items: center; }
 .updater-settings-panel [role="status"],
 .updater-settings-panel [role="alert"] { margin: 10px 0 0; font-size: 13px; }
+
+
+/* Sales report workspace */
+.report-toolbar {
+  display: flex;
+  align-items: end;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin: 0 0 18px;
+  padding: 15px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--surface);
+}
+.report-period-control { display: grid; gap: 6px; min-width: 170px; color: var(--muted); font-size: 12px; font-weight: 650; }
+.report-period-control select { min-height: 40px; }
+.report-search { flex: 1 1 260px; min-width: min(100%, 230px); margin: 0; }
+.report-currency-note { flex: 1 1 100%; color: var(--subtle); font-size: 12px; line-height: 1.6; }
+.report-stats { margin-bottom: 18px; }
+.report-stats .stat-card { min-width: 0; }
+@media (max-width: 600px) {
+  .report-toolbar { align-items: stretch; padding: 12px; }
+  .report-period-control,.report-search { width: 100%; min-width: 0; }
+}
