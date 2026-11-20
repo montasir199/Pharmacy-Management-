@@ -368,6 +368,35 @@ describe('main application shell', () => {
     expect(within(catalog).getByRole('button', { name: /إضافة للفاتورة/ })).toBeInTheDocument()
   })
 
+  it('creates an independently priced sale unit for a product', async () => {
+    const user = userEvent.setup()
+    const originalInvoke = invokeMock.getMockImplementation()
+    invokeMock.mockImplementation((command: string, args: Record<string, unknown>) => {
+      if (command === 'save_product_sale_unit') return Promise.resolve(2)
+      return originalInvoke?.(command, args)
+    })
+    render(<App />)
+    await user.click(screen.getByRole('button', { name: 'المخزون' }))
+    await user.click(await screen.findByRole('button', { name: 'إدارة وحدات البيع باراسيتامول' }))
+    expect(screen.getByRole('dialog', { name: 'وحدات البيع' })).toBeInTheDocument()
+
+    await user.type(screen.getByLabelText('اسم الوحدة (مثل شريط أو عبوة)'), 'شريط')
+    await user.clear(screen.getByLabelText('عدد الوحدات الأساسية في وحدة البيع'))
+    await user.type(screen.getByLabelText('عدد الوحدات الأساسية في وحدة البيع'), '10')
+    await user.type(screen.getByLabelText('سعر وحدة البيع'), '10.00')
+    await user.click(screen.getByRole('button', { name: 'حفظ وحدة البيع' }))
+
+    await waitFor(() => {
+      expect(invokeMock).toHaveBeenCalledWith('save_product_sale_unit', {
+        productId: 1,
+        saleUnitId: null,
+        name: 'شريط',
+        baseUnitsPerUnit: 10,
+        salePriceMinor: 1000,
+      })
+    })
+  })
+
   it('filters POS products by category and opens batch details', async () => {
     const user = userEvent.setup()
     render(<App />)
@@ -513,6 +542,46 @@ describe('main application shell', () => {
     await user.type(barcode, '628100{Enter}')
 
     expect(await screen.findByLabelText('الكمية بوحدة المنتج باراسيتامول')).toHaveValue(1)
+    expect(screen.getByRole('textbox', { name: 'ابحث عن منتج أو رمز...' })).toHaveFocus()
+  })
+
+  it('checks out a product using the selected sale unit and its independent price', async () => {
+    const user = userEvent.setup()
+    const originalInvoke = invokeMock.getMockImplementation()
+    invokeMock.mockImplementation((command: string, args: Record<string, unknown>) => {
+      if (command === 'list_products') return Promise.resolve([{
+        id: 1,
+        sku: 'MED-100',
+        barcode: '628100',
+        nameAr: 'باراسيتامول',
+        nameEn: 'Paracetamol',
+        baseUnit: 'قرص',
+        category: 'مسكنات',
+        reorderLevelUnits: 5,
+        salePriceMinor: 1250,
+        availableUnits: 24,
+        nearestExpiryDate: null,
+        saleUnits: [
+          { id: 1, name: 'قرص', baseUnitsPerUnit: 1, salePriceMinor: 1250, isBaseUnit: true },
+          { id: 2, name: 'شريط', baseUnitsPerUnit: 10, salePriceMinor: 9000, isBaseUnit: false },
+        ],
+      }])
+      return originalInvoke?.(command, args)
+    })
+    render(<App />)
+    await user.click(screen.getByRole('button', { name: 'المبيعات' }))
+    await user.click(await screen.findByRole('button', { name: /إضافة للفاتورة باراسيتامول/ }))
+    await user.selectOptions(screen.getByLabelText('وحدة البيع باراسيتامول'), '2')
+    expect(screen.getAllByText(/٩٠٫٠٠/).length).toBeGreaterThan(0)
+    await user.click(screen.getByRole('button', { name: /عملية الدفع/ }))
+    await user.click(screen.getByRole('button', { name: /إتمام البيع/ }))
+
+    await waitFor(() => {
+      expect(invokeMock).toHaveBeenCalledWith('create_sale_with_units', expect.objectContaining({
+        items: [{ productId: 1, saleUnitId: 2, quantity: 1, discountType: 'percent', discountValue: 0 }],
+        payments: [{ method: 'cash', amountMinor: 9000, currencyCode: 'SAR' }],
+      }))
+    })
   })
 
   it('supports checkout keyboard shortcuts and quick quantity changes', async () => {

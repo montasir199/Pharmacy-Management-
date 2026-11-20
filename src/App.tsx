@@ -287,6 +287,12 @@ function App() {
   const [productCatalogFilter, setProductCatalogFilter] = useState<'all' | 'low' | 'expiring'>('all')
   const [productBarcode, setProductBarcode] = useState('')
   const [reorderLevel, setReorderLevel] = useState('0')
+  const [saleUnitEditorProductId, setSaleUnitEditorProductId] = useState<number | null>(null)
+  const [saleUnitEditingId, setSaleUnitEditingId] = useState<number | null>(null)
+  const [saleUnitName, setSaleUnitName] = useState('')
+  const [saleUnitBaseUnits, setSaleUnitBaseUnits] = useState('2')
+  const [saleUnitPrice, setSaleUnitPrice] = useState('')
+  const [saleUnitSaving, setSaleUnitSaving] = useState(false)
   const [sales, setSales] = useState<SaleSummary[]>([])
   const saleSearchRef = useRef<HTMLInputElement>(null)
   const saleBarcodeRef = useRef<HTMLInputElement>(null)
@@ -384,6 +390,7 @@ function App() {
   })
   const saleCategories = [...new Set(products.map((product) => product.category).filter(Boolean))].sort((a, b) => a.localeCompare(b))
   const batchInfoProduct = products.find((product) => product.id === batchInfoProductId)
+  const saleUnitEditorProduct = products.find((product) => product.id === saleUnitEditorProductId) ?? null
   const saleAvailableCount = products.filter((product) => product.availableUnits > 0).length
   const saleLowStockCount = products.filter((product) => product.availableUnits > 0 && product.availableUnits <= product.reorderLevelUnits).length
   const saleOutOfStockCount = products.filter((product) => product.availableUnits === 0).length
@@ -1207,6 +1214,7 @@ function App() {
     }
     addToSaleCart(product.id)
     setSaleBarcode('')
+    saleSearchRef.current?.focus()
   }
 
   function removeSaleItem(productId: number) {
@@ -1347,6 +1355,47 @@ function App() {
       await refreshProducts()
     } catch (error) {
       setInventoryError(error instanceof Error ? error.message : String(error))
+    }
+  }
+
+  function openSaleUnitEditor(product: ProductSummary, unitId?: number) {
+    const unit = unitId === undefined ? undefined : product.saleUnits?.find((entry) => entry.id === unitId)
+    setSaleUnitEditorProductId(product.id)
+    setSaleUnitEditingId(unit?.id ?? null)
+    setSaleUnitName(unit?.name ?? '')
+    setSaleUnitBaseUnits(String(unit?.baseUnitsPerUnit ?? 2))
+    setSaleUnitPrice(unit ? (unit.salePriceMinor / 100).toFixed(2) : '')
+    setInventoryError('')
+  }
+
+  async function saveSaleUnit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    if (saleUnitEditorProductId === null || saleUnitSaving) return
+    const baseUnitsPerUnit = Number(saleUnitBaseUnits)
+    const salePriceMinor = Math.round(Number(saleUnitPrice) * 100)
+    if (!Number.isSafeInteger(baseUnitsPerUnit) || baseUnitsPerUnit < 2
+      || !Number.isSafeInteger(salePriceMinor) || salePriceMinor < 1
+      || !saleUnitName.trim() || saleUnitName.trim().length > 40) {
+      setInventoryError(t('invalidSaleUnit'))
+      return
+    }
+
+    setSaleUnitSaving(true)
+    setInventoryError('')
+    try {
+      const savedId = await invoke<number>('save_product_sale_unit', {
+        productId: saleUnitEditorProductId,
+        saleUnitId: saleUnitEditingId,
+        name: saleUnitName,
+        baseUnitsPerUnit,
+        salePriceMinor,
+      })
+      await refreshProducts()
+      setSaleUnitEditingId(savedId)
+    } catch (error) {
+      setInventoryError(error instanceof Error ? error.message : String(error))
+    } finally {
+      setSaleUnitSaving(false)
     }
   }
 
@@ -2111,6 +2160,7 @@ function App() {
                         <th>{t('unitPrice')}</th>
                         <th>{t('availableUnits')}</th>
                         <th>{t('reorderLevel')}</th>
+                        <th>{t('saleUnits')}</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -2152,11 +2202,21 @@ function App() {
                               <button className="text-button" type="button" onClick={() => void saveProductReorderLevel(product.id)}>{t('saveReorderLevel')}</button>
                             </div>
                           </td>
+                          <td>
+                            <button
+                              className="text-button sale-units-open-button"
+                              type="button"
+                              aria-label={`${t('manageSaleUnits')} ${isArabic ? product.nameAr : product.nameEn}`}
+                              onClick={() => openSaleUnitEditor(product)}
+                            >
+                              {t('manageSaleUnits')} ({(product.saleUnits ?? []).filter((unit) => !unit.isBaseUnit).length})
+                            </button>
+                          </td>
                         </tr>
                       ))}
                       {products.length === 0 && !inventoryLoading && (
                         <tr>
-                          <td colSpan={5} className="inventory-empty">{t('noProducts')}</td>
+                          <td colSpan={7} className="inventory-empty">{t('noProducts')}</td>
                         </tr>
                       )}
                     </tbody>
@@ -2195,6 +2255,67 @@ function App() {
                 )}
               </section>
             </div>
+            {saleUnitEditorProductId !== null && saleUnitEditorProduct && (
+              <div className="pos-modal-backdrop" role="presentation" onMouseDown={(event) => {
+                if (event.target === event.currentTarget && !saleUnitSaving) setSaleUnitEditorProductId(null)
+              }}>
+                <section
+                  className="pos-confirm-dialog pos-sale-unit-dialog"
+                  role="dialog"
+                  aria-modal="true"
+                  aria-labelledby="sale-unit-dialog-title"
+                  onKeyDown={(event) => {
+                    if (event.key === 'Escape' && !saleUnitSaving) setSaleUnitEditorProductId(null)
+                  }}
+                >
+                  <div className="panel-heading">
+                    <div>
+                      <h3 id="sale-unit-dialog-title">{t('saleUnits')}</h3>
+                      <p>{isArabic ? saleUnitEditorProduct.nameAr : saleUnitEditorProduct.nameEn}</p>
+                    </div>
+                    <button className="icon-button" type="button" aria-label={t('close')} onClick={() => setSaleUnitEditorProductId(null)} disabled={saleUnitSaving}><X size={17} /></button>
+                  </div>
+                  <div className="sale-unit-list">
+                    {(saleUnitEditorProduct.saleUnits ?? []).filter((unit) => !unit.isBaseUnit).map((unit) => (
+                      <button
+                        key={unit.id}
+                        className={`sale-unit-option ${unit.id === saleUnitEditingId ? 'is-selected' : ''}`}
+                        type="button"
+                        aria-label={`${t('editSaleUnit')} ${unit.name}`}
+                        onClick={() => openSaleUnitEditor(saleUnitEditorProduct, unit.id)}
+                      >
+                        <strong>{unit.name}</strong>
+                        <span>{unit.baseUnitsPerUnit} × {formatInvoiceMoney(unit.salePriceMinor)}</span>
+                      </button>
+                    ))}
+                    {(saleUnitEditorProduct.saleUnits ?? []).every((unit) => unit.isBaseUnit) && (
+                      <p className="inventory-empty">{t('noAlternateSaleUnits')}</p>
+                    )}
+                  </div>
+                  <button className="text-button sale-unit-add-button" type="button" onClick={() => openSaleUnitEditor(saleUnitEditorProduct)}>
+                    <Plus size={16} />{t('addSaleUnit')}
+                  </button>
+                  <form className="sale-unit-form" onSubmit={(event) => void saveSaleUnit(event)}>
+                    <label>
+                      <span>{t('saleUnitName')}</span>
+                      <input autoFocus maxLength={40} value={saleUnitName} onChange={(event) => setSaleUnitName(event.target.value)} required />
+                    </label>
+                    <label>
+                      <span>{t('baseUnitsPerSaleUnit')}</span>
+                      <input type="number" min="2" step="1" value={saleUnitBaseUnits} onChange={(event) => setSaleUnitBaseUnits(event.target.value)} required />
+                    </label>
+                    <label>
+                      <span>{t('saleUnitPrice')}</span>
+                      <input type="number" min="0.01" step="0.01" value={saleUnitPrice} onChange={(event) => setSaleUnitPrice(event.target.value)} required />
+                    </label>
+                    {inventoryError && <p className="page-error" role="alert">{inventoryError}</p>}
+                    <button className="primary-button" type="submit" disabled={saleUnitSaving}>
+                      {saleUnitSaving ? t('loading') : t('saveSaleUnit')}
+                    </button>
+                  </form>
+                </section>
+              </div>
+            )}
           </section>
         ) : activePage === 'customers' ? (
           <section className="page-content inventory-page">

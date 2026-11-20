@@ -3473,5 +3473,30 @@ button:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-vis
 .discount-type-select { max-width: 90px; margin-bottom: 5px; }
 .invoice-items-table .quantity-stepper .icon-button { min-width: 44px; min-height: 44px; }
 .pos-shortcuts-hint { color: var(--subtle); text-align: center; font-size: 9px; }
+.sale-units-open-button,
+.sale-unit-add-button { min-height: 44px; }
+.pos-sale-unit-dialog { display: grid; gap: 14px; width: min(520px, 100%); max-height: 90vh; overflow: auto; }
+.sale-unit-list { display: grid; gap: 7px; max-height: 180px; overflow: auto; }
+.sale-unit-option {
+  display: flex;
+  min-height: 44px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 11px;
+  color: var(--text);
+  text-align: start;
+  background: var(--surface-muted);
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  font: inherit;
+  cursor: pointer;
+}
+.sale-unit-option.is-selected { border-color: var(--green); }
+.sale-unit-option span { color: var(--subtle); font-size: 10px; }
+.sale-unit-form { display: grid; gap: 11px; }
+.sale-unit-form label { display: grid; gap: 5px; color: var(--subtle); font-size: 10px; }
+.sale-unit-form input { width: 100%; min-height: 42px; padding-inline: 10px; color: var(--text); background: var(--surface-muted); border: 1px solid var(--line); border-radius: 8px; }
+.sale-unit-form > button { min-height: 48px; }
 .app-shell[data-theme="dark"] .pos-stock-state.is-low { color: #f2d18e; background: rgb(149 101 26 / 23%); }
 .app-shell[data-theme="dark"] .pos-stock-state.is-out { color: #ffaaaa; background: rgb(163 60 60 / 22%); }
