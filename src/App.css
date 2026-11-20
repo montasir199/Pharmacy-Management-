@@ -3503,3 +3503,43 @@ button:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-vis
 .sale-unit-form > button { min-height: 48px; }
 .app-shell[data-theme="dark"] .pos-stock-state.is-low { color: #f2d18e; background: rgb(149 101 26 / 23%); }
 .app-shell[data-theme="dark"] .pos-stock-state.is-out { color: #ffaaaa; background: rgb(163 60 60 / 22%); }
+
+
+/* POS usability pass: consistent touch targets and responsive card density.
+   Keep the existing theme tokens, colors, and typography unchanged. */
+.pos-stock-filter {
+  min-height: 44px;
+}
+.sale-search,
+.barcode-search {
+  min-height: 44px;
+}
+.pos-invoice-tab,
+.pos-invoice-new {
+  min-height: 56px;
+}
+.pos-product-grid {
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 220px), 1fr));
+}
+.pos-product-identity h4 {
+  font-size: 13px;
+}
+.pos-product-card-price {
+  font-size: 19px;
+}
+.quantity-input,
+.discount-input {
+  min-height: 44px;
+  height: 44px;
+  width: 76px;
+}
+.quantity-stepper button {
+  min-width: 44px;
+  min-height: 44px;
+}
+.invoice-unit-select select {
+  min-height: 44px;
+}
+.pos-cart-items {
+  max-height: min(42vh, 380px);
+}
