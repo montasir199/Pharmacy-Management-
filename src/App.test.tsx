@@ -502,7 +502,7 @@ describe('main application shell', () => {
     expect(screen.getAllByText('مؤسسة الدواء').length).toBeGreaterThanOrEqual(2)
     expect(screen.getAllByText('شركة الشفاء').length).toBeGreaterThanOrEqual(2)
     const supplierTable = screen.getByRole('heading', { name: 'ملخص الموردين' }).closest('section')
-    expect(within(supplierTable as HTMLElement).getByText('2')).toBeInTheDocument()
+    expect(within(supplierTable as HTMLElement).getByText('2', { selector: 'td' })).toBeInTheDocument()
   })
 
   it('filters sales reports by period and customer without mixing currencies', async () => {
