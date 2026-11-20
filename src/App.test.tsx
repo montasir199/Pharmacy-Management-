@@ -178,7 +178,7 @@ describe('main application shell', () => {
     const reorderInput = await screen.findByRole('spinbutton', { name: 'حد إعادة الطلب باراسيتامول' })
     await user.clear(reorderInput)
     await user.type(reorderInput, '12')
-    await user.click(screen.getByRole('button', { name: 'حفظ' }))
+    await user.click(screen.getByRole('button', { name: 'حفظ الحد' }))
 
     await waitFor(() => {
       expect(invokeMock).toHaveBeenCalledWith('update_product_reorder_level', {
