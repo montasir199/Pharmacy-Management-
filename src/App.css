@@ -1425,6 +1425,58 @@ tbody tr:last-child td {
   height: 40px;
 }
 
+.pos-stock-filters {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 7px;
+}
+
+.pos-stock-filter {
+  display: inline-flex;
+  min-height: 32px;
+  align-items: center;
+  gap: 7px;
+  padding: 0 10px;
+  color: var(--subtle);
+  background: var(--surface-muted);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  font: inherit;
+  font-size: 10px;
+  cursor: pointer;
+  transition: background 140ms ease, border-color 140ms ease, color 140ms ease;
+}
+
+.pos-stock-filter:hover {
+  border-color: var(--green);
+  color: var(--text);
+}
+
+.pos-stock-filter.is-active {
+  color: var(--green-deep);
+  background: var(--green-soft);
+  border-color: var(--green);
+  font-weight: 700;
+}
+
+.pos-stock-filter span {
+  min-width: 18px;
+  padding: 1px 5px;
+  color: inherit;
+  background: rgb(0 0 0 / 5%);
+  border-radius: 5px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+
+.pos-result-count {
+  margin-inline-start: auto;
+  color: var(--subtle);
+  font-size: 10px;
+  white-space: nowrap;
+}
+
 .pos-product-table,
 .pos-cart-items {
   min-width: 0;
