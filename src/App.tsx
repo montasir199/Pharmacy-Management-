@@ -1144,7 +1144,7 @@ function App() {
 
   return (
     <div
-      className="app-shell"
+      className="app-shell luxury-theme"
       data-theme={theme}
       dir={isArabic ? 'rtl' : 'ltr'}
     >

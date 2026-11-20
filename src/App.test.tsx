@@ -87,6 +87,7 @@ describe('main application shell', () => {
     const user = userEvent.setup()
     render(<App />)
 
+    expect(document.querySelector('.app-shell')).toHaveClass('luxury-theme')
     expect(document.querySelector('.app-shell')).toHaveAttribute('dir', 'rtl')
     expect(screen.getByRole('heading', { name: 'نظرة عامة' })).toBeInTheDocument()
 
