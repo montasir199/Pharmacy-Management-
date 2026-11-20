@@ -107,6 +107,7 @@ describe('main application shell', () => {
 
     await user.click(screen.getByRole('button', { name: 'المخزون' }))
     expect(screen.getByRole('heading', { name: 'المخزون', level: 1 })).toBeInTheDocument()
+    expect(await screen.findByText('أدوية تقترب من انتهاء الصلاحية')).toBeInTheDocument()
   })
 
   it('loads the real product catalog and filters it from global search', async () => {
