@@ -188,6 +188,18 @@ const emptyPrinter: PrinterConfig = {
   isDefault: false,
 }
 
+function normalizeProductSearch(value: string): string {
+  return value
+    .normalize('NFKC')
+    .toLocaleLowerCase()
+    .replace(/[\\u064B-\\u065F\\u0670\\u0640]/g, '')
+    .replace(/[أإآ]/g, 'ا')
+    .replace(/ى/g, 'ي')
+    .replace(/[٠-٩]/g, (digit) => String(digit.charCodeAt(0) - 0x0660))
+    .replace(/[۰-۹]/g, (digit) => String(digit.charCodeAt(0) - 0x06f0))
+    .trim()
+}
+
 function daysUntilExpiry(dateValue: string): number {
   const [year, month, day] = dateValue.split('-').map(Number)
   if (!year || !month || !day) return Number.POSITIVE_INFINITY
@@ -253,6 +265,7 @@ function App() {
   const [saleCustomerId, setSaleCustomerId] = useState('')
   const [saleCart, setSaleCart] = useState<SaleCartLine[]>([])
   const [saleSearch, setSaleSearch] = useState('')
+  const [saleStockFilter, setSaleStockFilter] = useState<'all' | 'available' | 'low' | 'out'>('all')
   const [saleBarcode, setSaleBarcode] = useState('')
   const [currencies, setCurrencies] = useState<CurrencySummary[]>([])
   const [saleCurrencyCode, setSaleCurrencyCode] = useState('SAR')
@@ -349,6 +362,19 @@ function App() {
     }
     return true
   })
+  const saleSearchQuery = normalizeProductSearch(saleSearch)
+  const saleCatalogProducts = products.filter((product) => {
+    const matchesSearch = !saleSearchQuery || [product.nameAr, product.nameEn, product.sku, product.barcode ?? '']
+      .some((value) => normalizeProductSearch(value).includes(saleSearchQuery))
+    if (!matchesSearch) return false
+    if (saleStockFilter === 'available') return product.availableUnits > 0
+    if (saleStockFilter === 'low') return product.availableUnits > 0 && product.availableUnits <= product.reorderLevelUnits
+    if (saleStockFilter === 'out') return product.availableUnits === 0
+    return true
+  })
+  const saleAvailableCount = products.filter((product) => product.availableUnits > 0).length
+  const saleLowStockCount = products.filter((product) => product.availableUnits > 0 && product.availableUnits <= product.reorderLevelUnits).length
+  const saleOutOfStockCount = products.filter((product) => product.availableUnits === 0).length
   const dailySales = dashboard?.dailySales ?? []
   const chartMax = Math.max(...dailySales.map((day) => day.totalMinor), 0)
   const invoiceCurrencyExponent = currencies.find((currency) => currency.code === saleCurrencyCode)?.minorUnitExponent ?? 2
@@ -1026,9 +1052,9 @@ function App() {
   }
 
   function addScannedBarcode(value: string) {
-    const barcode = value.trim()
+    const barcode = normalizeProductSearch(value)
     if (!barcode) return
-    const product = products.find((entry) => entry.barcode === barcode)
+    const product = products.find((entry) => normalizeProductSearch(entry.barcode ?? '') === barcode)
     if (!product) {
       setInventoryError(t('noSearchResults'))
       return
@@ -2272,13 +2298,13 @@ function App() {
                         onKeyDown={(event) => {
                           if (event.key !== 'Enter') return
                           event.preventDefault()
-                          const query = saleSearch.trim().toLocaleLowerCase()
+                          const query = normalizeProductSearch(saleSearch)
                           const exact = products.find((product) =>
-                            product.barcode?.toLocaleLowerCase() === query
-                            || product.sku.toLocaleLowerCase() === query)
+                            normalizeProductSearch(product.barcode ?? '') === query
+                            || normalizeProductSearch(product.sku) === query)
                           const matches = products.filter((product) =>
                             [product.nameAr, product.nameEn, product.sku, product.barcode ?? '']
-                              .some((value) => value.toLocaleLowerCase().includes(query)))
+                              .some((value) => normalizeProductSearch(value).includes(query)))
                           const selectedProduct = exact ?? (matches.length === 1 ? matches[0] : undefined)
                           if (selectedProduct) {
                             addToSaleCart(selectedProduct.id)
@@ -2305,6 +2331,21 @@ function App() {
                         placeholder={t('scanBarcode')}
                       />
                     </label>
+                    <div className="pos-stock-filters" role="group" aria-label={t('posStockFilters')}>
+                      <button type="button" className={saleStockFilter === 'all' ? 'pos-stock-filter is-active' : 'pos-stock-filter'} aria-pressed={saleStockFilter === 'all'} onClick={() => setSaleStockFilter('all')}>
+                        {t('posFilterAll')} <span>{products.length}</span>
+                      </button>
+                      <button type="button" className={saleStockFilter === 'available' ? 'pos-stock-filter is-active' : 'pos-stock-filter'} aria-pressed={saleStockFilter === 'available'} onClick={() => setSaleStockFilter('available')}>
+                        {t('posFilterAvailable')} <span>{saleAvailableCount}</span>
+                      </button>
+                      <button type="button" className={saleStockFilter === 'low' ? 'pos-stock-filter is-active' : 'pos-stock-filter'} aria-pressed={saleStockFilter === 'low'} onClick={() => setSaleStockFilter('low')}>
+                        {t('posFilterLowStock')} <span>{saleLowStockCount}</span>
+                      </button>
+                      <button type="button" className={saleStockFilter === 'out' ? 'pos-stock-filter is-active' : 'pos-stock-filter'} aria-pressed={saleStockFilter === 'out'} onClick={() => setSaleStockFilter('out')}>
+                        {t('posFilterOutOfStock')} <span>{saleOutOfStockCount}</span>
+                      </button>
+                      <span className="pos-result-count">{t('posShowingProducts', { count: saleCatalogProducts.length })}</span>
+                    </div>
                     <div className="pos-product-table table-scroll">
                       <table>
                         <thead>
@@ -2318,11 +2359,7 @@ function App() {
                           </tr>
                         </thead>
                         <tbody>
-                          {products.filter((product) => {
-                            const query = saleSearch.trim().toLocaleLowerCase()
-                            return !query || [product.nameAr, product.nameEn, product.sku, product.barcode ?? '']
-                              .some((value) => value.toLocaleLowerCase().includes(query))
-                          }).map((product) => (
+                          {saleCatalogProducts.map((product) => (
                             <tr key={product.id}>
                               <td>
                                 <strong>{isArabic ? product.nameAr : product.nameEn}</strong>
@@ -2353,11 +2390,7 @@ function App() {
                           {products.length === 0 && !inventoryLoading && (
                             <tr><td colSpan={6} className="inventory-empty">{t('noProducts')}</td></tr>
                           )}
-                          {products.length > 0 && !products.some((product) => {
-                            const query = saleSearch.trim().toLocaleLowerCase()
-                            return !query || [product.nameAr, product.nameEn, product.sku, product.barcode ?? '']
-                              .some((value) => value.toLocaleLowerCase().includes(query))
-                          }) && (
+                          {products.length > 0 && saleCatalogProducts.length === 0 && (
                             <tr><td colSpan={6} className="inventory-empty">{t('noSearchResults')}</td></tr>
                           )}
                         </tbody>
