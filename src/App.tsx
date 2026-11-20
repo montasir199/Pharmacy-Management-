@@ -223,6 +223,8 @@ function App() {
   const [customerName, setCustomerName] = useState('')
   const [customerPhone, setCustomerPhone] = useState('')
   const [purchases, setPurchases] = useState<PurchaseSummary[]>([])
+  const [purchaseSearch, setPurchaseSearch] = useState('')
+  const [customerSearch, setCustomerSearch] = useState('')
   const [purchaseReference, setPurchaseReference] = useState('')
   const [supplierName, setSupplierName] = useState('')
   const [purchaseTotal, setPurchaseTotal] = useState('')
@@ -1172,6 +1174,14 @@ function App() {
     localStorage.setItem('pharmacy-language', isArabic ? 'en' : 'ar')
   }
 
+  const filteredCustomers = customers.filter((customer) => {
+    const query = customerSearch.trim().toLocaleLowerCase()
+    return !query || [customer.name, customer.phone ?? ''].some((value) => value.toLocaleLowerCase().includes(query))
+  })
+  const filteredPurchases = purchases.filter((purchase) => {
+    const query = purchaseSearch.trim().toLocaleLowerCase()
+    return !query || [purchase.referenceNumber, purchase.supplierName, purchase.status].some((value) => value.toLocaleLowerCase().includes(query))
+  })
   const activeTitle = t(`nav.${activePage}`)
 
   return (
@@ -1768,6 +1778,10 @@ function App() {
                 <p>{t('customersDescription')}</p>
               </div>
             </div>
+            <div className="stats-grid report-stats">
+              <article className="stat-card"><p>{t('totalCustomers')}</p><strong className="stat-value">{customers.length}</strong></article>
+              <article className="stat-card"><p>{t('matchingCustomers')}</p><strong className="stat-value">{filteredCustomers.length}</strong></article>
+            </div>
             <div className="inventory-grid">
               <form className="panel inventory-form" onSubmit={createCustomer}>
                 <div className="panel-heading"><h3>{t('addCustomer')}</h3></div>
@@ -1776,12 +1790,20 @@ function App() {
                 <button className="primary-button" type="submit">{t('saveCustomer')}</button>
               </form>
               <section className="panel inventory-products">
+                <div className="panel-heading">
+                  <div><h3>{t('customerDirectory')}</h3><p>{t('customerDirectoryDescription')}</p></div>
+                  <span className="inventory-count">{filteredCustomers.length}</span>
+                </div>
+                <label className="product-search">
+                  <Search size={17} />
+                  <input value={customerSearch} onChange={(event) => setCustomerSearch(event.target.value)} placeholder={t('searchCustomers')} aria-label={t('searchCustomers')} />
+                </label>
                 <div className="table-scroll">
                   <table>
                     <thead><tr><th>{t('customerName')}</th><th>{t('phone')}</th></tr></thead>
                     <tbody>
-                      {customers.map((customer) => <tr key={customer.id}><td>{customer.name}</td><td>{customer.phone || '-'}</td></tr>)}
-                      {customers.length === 0 && <tr><td colSpan={2} className="inventory-empty">{t('noCustomers')}</td></tr>}
+                      {filteredCustomers.map((customer) => <tr key={customer.id}><td><strong>{customer.name}</strong></td><td>{customer.phone || '—'}</td></tr>)}
+                      {filteredCustomers.length === 0 && <tr><td colSpan={2} className="inventory-empty">{customerSearch ? t('noMatchingCustomers') : t('noCustomers')}</td></tr>}
                     </tbody>
                   </table>
                 </div>
@@ -1791,6 +1813,11 @@ function App() {
         ) : activePage === 'purchases' ? (
           <section className="page-content inventory-page">
             <div className="page-heading"><div><h2>{t('purchasesHeading')}</h2><p>{t('purchasesDescription')}</p></div></div>
+            <div className="stats-grid report-stats">
+              <article className="stat-card"><p>{t('purchaseRecords')}</p><strong className="stat-value">{purchases.length}</strong></article>
+              <article className="stat-card"><p>{t('filteredPurchases')}</p><strong className="stat-value">{filteredPurchases.length}</strong></article>
+              <article className="stat-card"><p>{t('purchaseValue')}</p><strong className="stat-value">{formatMoney(purchases.reduce((sum, purchase) => sum + purchase.totalMinor, 0))}</strong></article>
+            </div>
             <div className="inventory-grid">
               <form className="panel inventory-form" onSubmit={createPurchase}>
                 <label><span>{t('purchaseReference')}</span><input value={purchaseReference} onChange={(e) => setPurchaseReference(e.target.value)} required /></label>
@@ -1803,11 +1830,19 @@ function App() {
                 <button className="primary-button" type="submit">{t('savePurchaseAndStock')}</button>
               </form>
               <section className="panel inventory-products">
+                <div className="panel-heading">
+                  <div><h3>{t('purchaseHistory')}</h3><p>{t('purchaseHistoryDescription')}</p></div>
+                  <span className="inventory-count">{filteredPurchases.length}</span>
+                </div>
+                <label className="product-search">
+                  <Search size={17} />
+                  <input value={purchaseSearch} onChange={(event) => setPurchaseSearch(event.target.value)} placeholder={t('searchPurchases')} aria-label={t('searchPurchases')} />
+                </label>
                 <div className="table-scroll"><table><thead><tr><th>{t('purchaseReference')}</th><th>{t('supplierName')}</th><th>{t('amount')}</th><th>{t('status')}</th></tr></thead>
-                  <tbody>{purchases.map((purchase) => (
-                    <tr key={purchase.id}><td>{purchase.referenceNumber}</td><td>{purchase.supplierName}</td><td>{formatMoney(purchase.totalMinor)}</td><td>{t(purchase.status)}</td></tr>
+                  <tbody>{filteredPurchases.map((purchase) => (
+                    <tr key={purchase.id}><td><strong>{purchase.referenceNumber}</strong></td><td>{purchase.supplierName}</td><td>{formatMoney(purchase.totalMinor)}</td><td><span className={`status-pill ${purchase.status}`}>{t(purchase.status)}</span></td></tr>
                   ))}
-                  {purchases.length === 0 && <tr><td colSpan={4} className="inventory-empty">{t('noPurchases')}</td></tr>}</tbody>
+                  {filteredPurchases.length === 0 && <tr><td colSpan={4} className="inventory-empty">{purchaseSearch ? t('noMatchingPurchases') : t('noPurchases')}</td></tr>}</tbody>
                 </table></div>
               </section>
             </div>
