@@ -1,6 +1,6 @@
 {
   "productName": "Dawai Pharmacy",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "identifier": "com.dawai.pharmacy",
   "build": {
     "beforeDevCommand": "npm run dev",

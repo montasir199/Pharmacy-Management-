@@ -2658,3 +2658,8 @@ button:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-vis
 @media (max-width: 600px) {
   .global-currency-settings { grid-template-columns: 1fr; }
 }
+
+.updater-settings-panel { margin-block: 18px; }
+.updater-settings-panel .panel-heading { align-items: center; }
+.updater-settings-panel [role="status"],
+.updater-settings-panel [role="alert"] { margin: 10px 0 0; font-size: 13px; }
