@@ -312,6 +312,10 @@ const resources = {
       paymentMethods: 'طرق الدفع',
       invoiceSavedPrintFailed: 'تم حفظ الفاتورة، لكن تعذر تحميل تفاصيلها.',
       lowStockWarning: 'الكمية المتبقية منخفضة',
+      inventoryAttention: 'تنبيهات تحتاج إلى متابعة',
+      inventoryAttentionDescription: 'راجع الأصناف منخفضة المخزون وقريبة الانتهاء قبل عمليات البيع القادمة.',
+      dashboardLowStockCount: '{{count}} صنف عند حد إعادة الطلب أو أقل',
+      dashboardExpiringCount: '{{count}} صنف تنتهي صلاحيته خلال 90 يوماً',
     },
   },
   en: {
