@@ -2775,3 +2775,22 @@ button:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-vis
   .catalog-filter { justify-content: center; padding-inline: 6px; }
   .catalog-result-count { margin-inline-start: 0; }
 }
+
+
+/* Dashboard inventory attention center */
+.dashboard-stock-alerts { margin: 0 0 18px; padding: 18px 20px; }
+.dashboard-stock-alerts .panel-heading { margin-bottom: 13px; }
+.dashboard-stock-alert-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.dashboard-stock-alert {
+  display: flex; align-items: center; gap: 12px; min-width: 0; padding: 13px 14px;
+  text-align: start; color: var(--text); background: var(--surface-muted);
+  border: 1px solid var(--line); border-radius: 12px; cursor: pointer;
+  transition: border-color 150ms ease, transform 150ms ease;
+}
+.dashboard-stock-alert:hover { border-color: var(--accent); transform: translateY(-1px); }
+.dashboard-stock-alert > span:nth-child(2) { display: grid; gap: 3px; flex: 1; min-width: 0; }
+.dashboard-stock-alert small { color: var(--muted); font-size: 11px; }
+.dashboard-stock-alert-icon { display: grid; place-items: center; width: 36px; height: 36px; border-radius: 10px; }
+.dashboard-stock-alert-icon.is-low { color: #955b4f; background: #f7eeeb; }
+.dashboard-stock-alert-icon.is-expiring { color: #8a6426; background: #fbf2df; }
+@media (max-width: 600px) { .dashboard-stock-alerts { padding: 14px; } .dashboard-stock-alert-grid { grid-template-columns: 1fr; } }

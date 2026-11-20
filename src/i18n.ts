@@ -312,6 +312,10 @@ const resources = {
       paymentMethods: 'طرق الدفع',
       invoiceSavedPrintFailed: 'تم حفظ الفاتورة، لكن تعذر تحميل تفاصيلها.',
       lowStockWarning: 'الكمية المتبقية منخفضة',
+      inventoryAttention: 'تنبيهات تحتاج إلى متابعة',
+      inventoryAttentionDescription: 'راجع الأصناف منخفضة المخزون وقريبة الانتهاء قبل عمليات البيع القادمة.',
+      dashboardLowStockCount: '{{count}} صنف عند حد إعادة الطلب أو أقل',
+      dashboardExpiringCount: '{{count}} صنف تنتهي صلاحيته خلال 90 يوماً',
     },
   },
   en: {
@@ -620,6 +624,10 @@ const resources = {
       paymentMethods: 'Payment methods',
       invoiceSavedPrintFailed: 'Invoice saved, but its details could not be loaded.',
       lowStockWarning: 'Remaining stock is low',
+      inventoryAttention: 'Inventory needs attention',
+      inventoryAttentionDescription: 'Review low-stock and near-expiry products before the next sale.',
+      dashboardLowStockCount: '{{count}} products at or below reorder level',
+      dashboardExpiringCount: '{{count}} products expiring within 90 days',
     },
   },
 } as const

@@ -110,6 +110,25 @@ describe('main application shell', () => {
     expect(await screen.findByText('أدوية تقترب من انتهاء الصلاحية')).toBeInTheDocument()
   })
 
+  it('shows actionable inventory alerts on the dashboard and opens the matching catalog filter', async () => {
+    const user = userEvent.setup()
+    const soon = new Date(Date.now() + 20 * 86_400_000).toISOString().slice(0, 10)
+    const originalInvoke = invokeMock.getMockImplementation()
+    invokeMock.mockImplementation((command: string, args: Record<string, unknown>) => {
+      if (command === 'list_products') return Promise.resolve([
+        { id: 1, sku: 'MED-LOW', barcode: null, nameAr: 'دواء منخفض', nameEn: 'Low medicine', baseUnit: 'قرص', reorderLevelUnits: 5, salePriceMinor: 1250, availableUnits: 2, nearestExpiryDate: null },
+        { id: 2, sku: 'MED-EXP', barcode: null, nameAr: 'دواء قريب الانتهاء', nameEn: 'Expiring medicine', baseUnit: 'قرص', reorderLevelUnits: 0, salePriceMinor: 1250, availableUnits: 8, nearestExpiryDate: soon },
+      ])
+      return originalInvoke?.(command, args)
+    })
+    render(<App />)
+
+    expect(await screen.findByText('تنبيهات تحتاج إلى متابعة')).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: /مخزون منخفض/ }))
+    expect(await screen.findByText('Low medicine')).toBeInTheDocument()
+    expect(screen.queryByText('Expiring medicine')).not.toBeInTheDocument()
+  })
+
   it('loads the real product catalog and filters it from global search', async () => {
     const user = userEvent.setup()
     render(<App />)
