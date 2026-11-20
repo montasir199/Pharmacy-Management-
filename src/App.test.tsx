@@ -324,6 +324,16 @@ describe('main application shell', () => {
     })
   })
 
+  it('shows the point-of-sale catalog as accessible medicine cards', async () => {
+    const user = userEvent.setup()
+    render(<App />)
+    await user.click(screen.getByRole('button', { name: 'المبيعات' }))
+    const catalog = await screen.findByRole('list', { name: 'المنتجات' })
+    expect(catalog).toBeInTheDocument()
+    expect(within(catalog).getByRole('listitem')).toBeInTheDocument()
+    expect(within(catalog).getByRole('button', { name: /إضافة للفاتورة/ })).toBeInTheDocument()
+  })
+
   it('renders the redesigned point-of-sale workspace overview and live invoice metrics', async () => {
     render(<App />)
     await userEvent.setup().click(screen.getByRole('button', { name: 'المبيعات' }))
