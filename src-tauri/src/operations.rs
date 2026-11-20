@@ -85,6 +85,7 @@ pub struct SaleDetail {
     pub currency_code: String,
     pub exchange_rate_scaled: i64,
     pub tax_rate_basis_points: i64,
+    pub note: String,
     pub items: Vec<SaleItemDetail>,
     pub payments: Vec<SalePaymentSummary>,
 }
@@ -433,6 +434,19 @@ pub fn create_sale_with_units(
     if !currency_enabled {
         return Err("Selected currency is disabled".to_owned());
     }
+    let sale_note = if let Some(draft_id) = draft_id {
+        transaction
+            .query_row(
+                "SELECT note FROM pos_drafts WHERE id = ?1",
+                [draft_id],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()
+            .map_err(|error| error.to_string())?
+            .ok_or_else(|| "POS draft was not found".to_owned())?
+    } else {
+        String::new()
+    };
     let configured_tax_rate: Option<String> = transaction
         .query_row(
             "SELECT value FROM app_settings WHERE key = 'tax_rate_basis_points'",
@@ -551,8 +565,8 @@ pub fn create_sale_with_units(
         .execute(
             "INSERT INTO sales
              (invoice_number, customer_id, subtotal_minor, discount_minor, tax_minor, total_minor,
-              status, currency_code, exchange_rate_scaled, tax_rate_basis_points)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+              status, currency_code, exchange_rate_scaled, tax_rate_basis_points, note)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
             params![
                 invoice_number,
                 customer_id,
@@ -563,7 +577,8 @@ pub fn create_sale_with_units(
                 status,
                 currency_code,
                 exchange_rate_scaled,
-                tax_rate_basis_points
+                tax_rate_basis_points,
+                sale_note.trim()
             ],
         )
         .map_err(|error| error.to_string())?;
@@ -677,7 +692,7 @@ pub fn get_sale(connection: &Connection, sale_id: i64) -> Result<SaleDetail, Str
             "SELECT sales.id, sales.invoice_number, customers.name, sales.sold_at,
                     sales.subtotal_minor, sales.discount_minor, sales.tax_minor, sales.total_minor,
                     sales.status, sales.currency_code, sales.exchange_rate_scaled,
-                    sales.tax_rate_basis_points
+                    sales.tax_rate_basis_points, sales.note
              FROM sales LEFT JOIN customers ON customers.id = sales.customer_id
              WHERE sales.id = ?1",
             [sale_id],
@@ -695,6 +710,7 @@ pub fn get_sale(connection: &Connection, sale_id: i64) -> Result<SaleDetail, Str
                     currency_code: row.get(9)?,
                     exchange_rate_scaled: row.get(10)?,
                     tax_rate_basis_points: row.get(11)?,
+                    note: row.get(12)?,
                     items: Vec::new(),
                     payments: Vec::new(),
                 })
@@ -1344,7 +1360,9 @@ mod tests {
             "initial-stock",
         )
         .expect("receive package stock");
-        let draft = create_pos_draft(&connection).expect("create checkout draft");
+        let mut draft = create_pos_draft(&connection).expect("create checkout draft");
+        draft.note = "طلب عميل".to_owned();
+        save_pos_draft(&mut connection, &draft).expect("save checkout note");
 
         let sale = create_sale_with_units(
             &mut connection,
@@ -1374,6 +1392,7 @@ mod tests {
             0
         );
         let detail = get_sale(&connection, sale.id).expect("read package sale");
+        assert_eq!(detail.note, "طلب عميل");
         assert_eq!(detail.items[0].quantity, 2);
         assert_eq!(detail.items[0].base_quantity, 20);
         assert_eq!(detail.items[0].sale_unit_name, "شريط");

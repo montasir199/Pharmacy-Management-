@@ -96,6 +96,7 @@ describe('main application shell', () => {
         taxMinor: 0,
         totalMinor: 1250,
         customerName: null,
+        note: 'ملاحظة الفاتورة',
         soldAt: new Date().toISOString(),
         currencyCode: 'SAR',
         exchangeRateScaled: 1000000000,
@@ -104,9 +105,12 @@ describe('main application shell', () => {
           productNameAr: 'باراسيتامول',
           productNameEn: 'Paracetamol',
           quantity: 1,
+          baseQuantity: 1,
+          saleUnitName: 'قرص',
           unitPriceMinor: 1250,
           discountMinor: 0,
           lineTotalMinor: 1250,
+          batches: [{ batchNumber: 'BATCH-1', expiryDate: '2027-01-30', units: 1 }],
         }],
         payments: [{ method: 'cash', amountMinor: 1250, currencyCode: 'SAR' }],
       })
@@ -474,7 +478,9 @@ describe('main application shell', () => {
     expect(await screen.findByText('INV-20261119-000001')).toBeInTheDocument()
     expect(screen.getByRole('button', { name: /طباعة الفاتورة/ })).toBeInTheDocument()
     expect(screen.getByText('شكرًا لزيارتكم')).toBeInTheDocument()
+    expect(screen.getByText('ملاحظة الفاتورة: ملاحظة الفاتورة')).toBeInTheDocument()
     expect(screen.getByText(/المبلغ المدفوع/)).toBeInTheDocument()
+    expect(screen.getByText('BATCH-1 · 2027-01-30 · 1')).toBeInTheDocument()
     expect(document.querySelector('.receipt-code-row svg')).toBeInTheDocument()
   })
 

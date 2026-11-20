@@ -35,6 +35,7 @@ pub(crate) fn migrations() -> Migrations<'static> {
         M::up(include_str!("../migrations/0005_pos_payments.sql")),
         M::up(include_str!("../migrations/0006_thermal_printing.sql")),
         M::up(include_str!("../migrations/0007_pos_workflow.sql")),
+        M::up(include_str!("../migrations/0008_sale_invoice_note.sql")),
     ])
 }
 
@@ -207,6 +208,14 @@ mod tests {
         assert_eq!(unit_price, 250);
         assert_eq!(unit_multiplier, 1);
         assert_eq!(sold_quantity, 4);
+        let migrated_note: String = connection
+            .query_row(
+                "SELECT note FROM sales WHERE invoice_number = 'INV-MIGRATION'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("read migrated sale note");
+        assert_eq!(migrated_note, "");
     }
 
     #[test]
@@ -275,7 +284,7 @@ mod tests {
         let connection =
             Connection::open(directory.path().join(DATABASE_FILE)).expect("create database file");
         connection
-            .pragma_update(None, "user_version", 8)
+            .pragma_update(None, "user_version", 9)
             .expect("set future schema version");
         drop(connection);
 

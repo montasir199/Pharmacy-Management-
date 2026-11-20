@@ -96,6 +96,7 @@ type SaleReceipt = {
   taxMinor: number
   totalMinor: number
   customerName: string | null
+  note: string
   soldAt: string
   currencyCode: string
   exchangeRateScaled: number
@@ -104,9 +105,12 @@ type SaleReceipt = {
     productNameAr: string
     productNameEn: string
     quantity: number
+    baseQuantity: number
+    saleUnitName: string
     unitPriceMinor: number
     discountMinor: number
     lineTotalMinor: number
+    batches: Array<{ batchNumber: string; expiryDate: string; units: number }>
   }>
   payments: Array<{ method: string; amountMinor: number; currencyCode: string }>
 }
@@ -2856,7 +2860,12 @@ function App() {
                           <tr key={`${item.productNameAr}-${index}`}>
                             <td>
                               <strong>{isArabic ? item.productNameAr : item.productNameEn}</strong>
-                              <small>{item.quantity} × {formatInvoiceMoney(item.unitPriceMinor, saleReceipt.currencyCode, saleReceipt.exchangeRateScaled)}</small>
+                              <small>{item.quantity} × {item.saleUnitName} · {formatInvoiceMoney(item.unitPriceMinor, saleReceipt.currencyCode, saleReceipt.exchangeRateScaled)}</small>
+                              {item.batches?.map((batch) => (
+                                <small key={`${batch.batchNumber}-${batch.expiryDate}`}>
+                                  {batch.batchNumber} · {batch.expiryDate} · {batch.units}
+                                </small>
+                              ))}
                             </td>
                             <td>{formatInvoiceMoney(item.discountMinor, saleReceipt.currencyCode, saleReceipt.exchangeRateScaled)}</td>
                             <td><strong>{formatInvoiceMoney(item.lineTotalMinor, saleReceipt.currencyCode, saleReceipt.exchangeRateScaled)}</strong></td>
@@ -2864,6 +2873,7 @@ function App() {
                         ))}</tbody>
                       </table></div>
                       <div className="receipt-totals">
+                        {saleReceipt.note && <p>{t('invoiceNote')}: {saleReceipt.note}</p>}
                         <p>{t('subtotal')}: {formatInvoiceMoney(saleReceipt.subtotalMinor, saleReceipt.currencyCode, saleReceipt.exchangeRateScaled)}</p>
                         <p>{t('discounts')}: {formatInvoiceMoney(saleReceipt.discountMinor, saleReceipt.currencyCode, saleReceipt.exchangeRateScaled)}</p>
                         <p>{t('vat')} ({(saleReceipt.taxRateBasisPoints / 100).toFixed(2)}%): {formatInvoiceMoney(saleReceipt.taxMinor, saleReceipt.currencyCode, saleReceipt.exchangeRateScaled)}</p>
