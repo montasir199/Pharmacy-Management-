@@ -2282,6 +2282,18 @@ function App() {
             )}
             {activePage === 'sales' && (
               <>
+                <section className="pos-overview" aria-label={t('posOverview')}>
+                  <div className="pos-overview-copy">
+                    <span className="pos-eyebrow">{t('posLiveLabel')}</span>
+                    <h3>{t('posWorkspaceTitle')}</h3>
+                    <p>{t('posWorkspaceDescription')}</p>
+                  </div>
+                  <div className="pos-overview-metrics">
+                    <div className="pos-overview-metric"><span>{t('posCatalogCount')}</span><strong>{products.length}</strong></div>
+                    <div className="pos-overview-metric"><span>{t('posCartCount')}</span><strong>{saleCart.length}</strong></div>
+                    <div className="pos-overview-metric pos-overview-total"><span>{t('posCurrentTotal')}</span><strong>{formatInvoiceMoney(invoiceTotalMinor)}</strong></div>
+                  </div>
+                </section>
                 <div className="pos-layout">
                   <section className="panel pos-catalog">
                     <div className="panel-heading">
