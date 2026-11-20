@@ -2630,3 +2630,31 @@ button:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-vis
 .product-reorder-editor { display: flex; align-items: center; gap: 8px; min-width: 142px; }
 .product-reorder-editor input { width: 68px; min-width: 0; padding: 7px 8px; text-align: center; font-variant-numeric: tabular-nums; }
 .product-reorder-editor .text-button { white-space: nowrap; }
+
+
+.global-currency-settings {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+  grid-column: 1 / -1;
+  padding: 16px;
+  border: 1px solid color-mix(in srgb, var(--accent) 22%, var(--line));
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--accent) 5%, var(--surface));
+}
+.global-currency-settings label,
+.active-currency-display { display: flex; flex-direction: column; gap: 7px; min-width: 0; }
+.global-currency-settings small,
+.active-currency-display small { color: var(--muted); font-size: 12px; }
+.active-currency-display {
+  justify-content: center;
+  min-width: 0;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface);
+}
+.active-currency-display strong { font-size: 15px; }
+@media (max-width: 600px) {
+  .global-currency-settings { grid-template-columns: 1fr; }
+}
