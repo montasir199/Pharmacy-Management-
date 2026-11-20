@@ -221,7 +221,7 @@ describe('main application shell', () => {
       })
     })
 
-    await user.click(screen.getByRole('button', { name: 'نقطة البيع' }))
+    await user.click(screen.getByRole('button', { name: 'المبيعات' }))
     expect(screen.queryByLabelText('العملة الافتراضية للنظام')).not.toBeInTheDocument()
     expect(screen.queryByRole('combobox', { name: 'العملة' })).not.toBeInTheDocument()
     expect(screen.getByText(/USD/)).toBeInTheDocument()
