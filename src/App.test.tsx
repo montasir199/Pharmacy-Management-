@@ -124,7 +124,7 @@ describe('main application shell', () => {
     render(<App />)
 
     expect(await screen.findByText('تنبيهات تحتاج إلى متابعة')).toBeInTheDocument()
-    await user.click(screen.getByRole('button', { name: /صنف عند حد إعادة الطلب أو أقل/ }))
+    await user.click(screen.getByRole('button', { name: /مخزون منخفض/ }))
     expect(await screen.findByText('Low medicine')).toBeInTheDocument()
     expect(screen.queryByText('Expiring medicine')).not.toBeInTheDocument()
   })
