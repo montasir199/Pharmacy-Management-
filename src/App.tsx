@@ -207,6 +207,7 @@ function App() {
     productId: string
     balances: BatchBalance[]
   } | null>(null)
+  const [batchInfoProductId, setBatchInfoProductId] = useState<number | null>(null)
   const [inventoryError, setInventoryError] = useState('')
   const [inventoryLoading, setInventoryLoading] = useState(false)
   const [productNameAr, setProductNameAr] = useState('')
@@ -247,6 +248,7 @@ function App() {
   const [saleCart, setSaleCart] = useState<SaleCartLine[]>([])
   const [saleSearch, setSaleSearch] = useState('')
   const [saleStockFilter, setSaleStockFilter] = useState<SaleStockFilter>('all')
+  const [saleCategory, setSaleCategory] = useState('')
   const [saleBarcode, setSaleBarcode] = useState('')
   const [currencies, setCurrencies] = useState<CurrencySummary[]>([])
   const [saleCurrencyCode, setSaleCurrencyCode] = useState('SAR')
@@ -348,11 +350,14 @@ function App() {
     const matchesSearch = !saleSearchQuery || [product.nameAr, product.nameEn, product.sku, product.barcode ?? '']
       .some((value) => normalizeProductSearch(value).includes(saleSearchQuery))
     if (!matchesSearch) return false
-    if (saleStockFilter === 'available') return product.availableUnits > 0
-    if (saleStockFilter === 'low') return product.availableUnits > 0 && product.availableUnits <= product.reorderLevelUnits
-    if (saleStockFilter === 'out') return product.availableUnits === 0
+    if (saleStockFilter === 'available' && product.availableUnits <= 0) return false
+    if (saleStockFilter === 'low' && !(product.availableUnits > 0 && product.availableUnits <= product.reorderLevelUnits)) return false
+    if (saleStockFilter === 'out' && product.availableUnits !== 0) return false
+    if (saleCategory && product.category !== saleCategory) return false
     return true
   })
+  const saleCategories = [...new Set(products.map((product) => product.category).filter(Boolean))].sort((a, b) => a.localeCompare(b))
+  const batchInfoProduct = products.find((product) => product.id === batchInfoProductId)
   const saleAvailableCount = products.filter((product) => product.availableUnits > 0).length
   const saleLowStockCount = products.filter((product) => product.availableUnits > 0 && product.availableUnits <= product.reorderLevelUnits).length
   const saleOutOfStockCount = products.filter((product) => product.availableUnits === 0).length
@@ -821,6 +826,18 @@ function App() {
       })
       setBatchBalanceResult({ productId: batchProductId, balances })
     } catch (error) {
+      setInventoryError(error instanceof Error ? error.message : String(error))
+    }
+  }
+
+  async function showProductBatches(productId: number) {
+    setInventoryError('')
+    setBatchInfoProductId(productId)
+    try {
+      const balances = await invoke<BatchBalance[]>('get_batch_balances', { productId })
+      setBatchBalanceResult({ productId: String(productId), balances })
+    } catch (error) {
+      setBatchInfoProductId(null)
       setInventoryError(error instanceof Error ? error.message : String(error))
     }
   }
@@ -2317,12 +2334,16 @@ function App() {
                       availableCount={saleAvailableCount}
                       lowStockCount={saleLowStockCount}
                       outOfStockCount={saleOutOfStockCount}
+                      categories={saleCategories}
+                      category={saleCategory}
                       filter={saleStockFilter}
                       inventoryLoading={inventoryLoading}
                       isArabic={isArabic}
                       formatPrice={formatInvoiceMoney}
                       onFilterChange={setSaleStockFilter}
+                      onCategoryChange={setSaleCategory}
                       onAddProduct={addToSaleCart}
+                      onShowProductInfo={(productId) => void showProductBatches(productId)}
                     />
                   </section>
                   <form ref={saleFormRef} className="panel pos-cart" onSubmit={createSale}>
@@ -2518,6 +2539,37 @@ function App() {
                     </button>
                   </form>
                 </div>
+                {batchInfoProductId !== null && (
+                  <div className="pos-modal-backdrop" role="presentation" onMouseDown={(event) => {
+                    if (event.target === event.currentTarget) setBatchInfoProductId(null)
+                  }}>
+                    <section className="pos-confirm-dialog pos-batch-info-dialog" role="dialog" aria-modal="true" aria-labelledby="product-batch-info-title">
+                      <div className="panel-heading">
+                        <div>
+                          <h3 id="product-batch-info-title">{t('productBatchInfo')}</h3>
+                          <p>{batchInfoProduct ? (isArabic ? batchInfoProduct.nameAr : batchInfoProduct.nameEn) : ''}</p>
+                        </div>
+                        <button className="icon-button" type="button" aria-label={t('close')} onClick={() => setBatchInfoProductId(null)}><X size={17} /></button>
+                      </div>
+                      <div className="table-scroll">
+                        <table>
+                          <thead><tr><th>{t('batchNumber')}</th><th>{t('expiryDate')}</th><th>{t('availableUnits')}</th><th>{t('status')}</th></tr></thead>
+                          <tbody>
+                            {(batchBalanceResult?.productId === String(batchInfoProductId) ? batchBalanceResult.balances : []).map((batch) => (
+                              <tr key={batch.batchId}>
+                                <td>{batch.batchNumber}</td><td>{batch.expiryDate}</td><td>{batch.availableUnits}</td>
+                                <td>{batch.isExpired ? t('expired') : t('valid')}</td>
+                              </tr>
+                            ))}
+                            {(batchBalanceResult?.productId === String(batchInfoProductId) ? batchBalanceResult.balances : []).length === 0 && (
+                              <tr><td colSpan={4} className="inventory-empty">{t('noBatchBalances')}</td></tr>
+                            )}
+                          </tbody>
+                        </table>
+                      </div>
+                    </section>
+                  </div>
+                )}
                 {saleReceipt && (
                   <section className="panel receipt-panel">
                     <div className="receipt-actions">

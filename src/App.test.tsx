@@ -40,10 +40,18 @@ describe('main application shell', () => {
         nameAr: 'باراسيتامول',
         nameEn: 'Paracetamol',
         baseUnit: 'قرص',
+        category: 'مسكنات',
         reorderLevelUnits: 5,
         salePriceMinor: 1250,
         availableUnits: 24,
         nearestExpiryDate: new Date(Date.now() + 30 * 86_400_000).toISOString().slice(0, 10),
+        saleUnits: [{
+          id: 1,
+          name: 'قرص',
+          baseUnitsPerUnit: 1,
+          salePriceMinor: 1250,
+          isBaseUnit: true,
+        }],
       }])
       if (command === 'list_currencies') return Promise.resolve([{
         code: 'SAR',
@@ -332,6 +340,19 @@ describe('main application shell', () => {
     expect(catalog).toBeInTheDocument()
     expect(within(catalog).getByRole('listitem')).toBeInTheDocument()
     expect(within(catalog).getByRole('button', { name: /إضافة للفاتورة/ })).toBeInTheDocument()
+  })
+
+  it('filters POS products by category and opens batch details', async () => {
+    const user = userEvent.setup()
+    render(<App />)
+    await user.click(screen.getByRole('button', { name: 'المبيعات' }))
+
+    await user.click(screen.getByRole('button', { name: 'مسكنات' }))
+    expect(await screen.findByText('باراسيتامول')).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'تفاصيل التشغيلات باراسيتامول' }))
+
+    expect(await screen.findByRole('dialog', { name: 'تفاصيل التشغيلات' })).toBeInTheDocument()
+    expect(screen.getByText('لا توجد أرصدة موجبة لهذا المنتج.')).toBeInTheDocument()
   })
 
   it('renders the redesigned point-of-sale workspace overview and live invoice metrics', async () => {
