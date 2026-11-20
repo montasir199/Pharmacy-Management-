@@ -188,6 +188,45 @@ describe('main application shell', () => {
     })
   })
 
+  it('configures the system currency in Settings and does not offer a currency selector in POS', async () => {
+    const user = userEvent.setup()
+    const originalInvoke = invokeMock.getMockImplementation()
+    invokeMock.mockImplementation((command: string, args: Record<string, unknown>) => {
+      if (command === 'list_currencies') return Promise.resolve([
+        { code: 'SAR', name: 'Saudi riyal', symbol: 'SAR', minorUnitExponent: 2 },
+        { code: 'USD', name: 'US Dollar', symbol: 'USD', minorUnitExponent: 2 },
+      ])
+      if (command === 'get_setting') {
+        if (args?.key === 'default_currency_code') return Promise.resolve('SAR')
+        if (args?.key === 'default_currency_exchange_rate') return Promise.resolve('1')
+        return Promise.resolve('')
+      }
+      return originalInvoke?.(command, args)
+    })
+    render(<App />)
+    await user.click(screen.getByRole('button', { name: 'الإعدادات' }))
+
+    await user.type(await screen.findByLabelText('اسم الصيدلية'), 'صيدلية الاختبار')
+    await user.selectOptions(await screen.findByLabelText('العملة الافتراضية للنظام'), 'USD')
+    await user.clear(screen.getByLabelText('سعر الصرف الافتراضي'))
+    await user.type(screen.getByLabelText('سعر الصرف الافتراضي'), '3.75')
+    await user.click(screen.getByRole('button', { name: 'حفظ الإعدادات' }))
+
+    await waitFor(() => {
+      expect(invokeMock).toHaveBeenCalledWith('set_settings', {
+        settings: expect.objectContaining({
+          default_currency_code: 'USD',
+          default_currency_exchange_rate: '3.75',
+        }),
+      })
+    })
+
+    await user.click(screen.getByRole('button', { name: 'المبيعات' }))
+    expect(screen.queryByLabelText('العملة الافتراضية للنظام')).not.toBeInTheDocument()
+    expect(screen.queryByRole('combobox', { name: 'العملة' })).not.toBeInTheDocument()
+    expect(screen.getByText(/USD/)).toBeInTheDocument()
+  })
+
   it('saves the pharmacy name through persistent settings', async () => {
     const user = userEvent.setup()
     render(<App />)
