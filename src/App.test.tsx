@@ -499,9 +499,10 @@ describe('main application shell', () => {
     render(<App />)
     await user.click(screen.getByRole('button', { name: 'المشتريات' }))
     expect(await screen.findByRole('heading', { name: 'ملخص الموردين' })).toBeInTheDocument()
-    expect(screen.getByText('مؤسسة الدواء')).toBeInTheDocument()
-    expect(screen.getByText('شركة الشفاء')).toBeInTheDocument()
-    expect(screen.getByText('2', { selector: 'td' })).toBeInTheDocument()
+    expect(screen.getAllByText('مؤسسة الدواء').length).toBeGreaterThanOrEqual(2)
+    expect(screen.getAllByText('شركة الشفاء').length).toBeGreaterThanOrEqual(2)
+    const supplierTable = screen.getByRole('heading', { name: 'ملخص الموردين' }).closest('section')
+    expect(within(supplierTable as HTMLElement).getByText('2')).toBeInTheDocument()
   })
 
   it('filters sales reports by period and customer without mixing currencies', async () => {
