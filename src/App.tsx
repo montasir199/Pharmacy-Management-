@@ -1722,7 +1722,7 @@ function App() {
                                 value={productReorderLevels[product.id] ?? String(product.reorderLevelUnits)}
                                 onChange={(event) => setProductReorderLevels((current) => ({ ...current, [product.id]: event.target.value }))}
                               />
-                              <button className="text-button" type="button" onClick={() => void saveProductReorderLevel(product.id)}>{t('save')}</button>
+                              <button className="text-button" type="button" onClick={() => void saveProductReorderLevel(product.id)}>{t('saveReorderLevel')}</button>
                             </div>
                           </td>
                         </tr>
