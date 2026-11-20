@@ -1539,19 +1539,6 @@ function App() {
                           <td>{product.sku}</td>
                           <td>{product.baseUnit}</td>
                           <td><span className={product.availableUnits <= product.reorderLevelUnits ? 'stock-low' : 'stock-ok'}>{product.availableUnits}</span></td>
-                          <td>
-                            <div className="product-reorder-editor">
-                              <input
-                                aria-label={`${t('reorderLevel')} ${isArabic ? product.nameAr : product.nameEn}`}
-                                type="number"
-                                min="0"
-                                step="1"
-                                value={productReorderLevels[product.id] ?? String(product.reorderLevelUnits)}
-                                onChange={(event) => setProductReorderLevels((current) => ({ ...current, [product.id]: event.target.value }))}
-                              />
-                              <button className="text-button" type="button" onClick={() => void saveProductReorderLevel(product.id)}>{t('save')}</button>
-                            </div>
-                          </td>
                           <td>{product.reorderLevelUnits}</td>
                         </tr>
                       ))}
@@ -1725,6 +1712,19 @@ function App() {
                             </div>
                           </td>
                           <td><span className={product.availableUnits <= product.reorderLevelUnits ? 'stock-low' : 'stock-ok'}>{product.availableUnits}</span></td>
+                          <td>
+                            <div className="product-reorder-editor">
+                              <input
+                                aria-label={`${t('reorderLevel')} ${isArabic ? product.nameAr : product.nameEn}`}
+                                type="number"
+                                min="0"
+                                step="1"
+                                value={productReorderLevels[product.id] ?? String(product.reorderLevelUnits)}
+                                onChange={(event) => setProductReorderLevels((current) => ({ ...current, [product.id]: event.target.value }))}
+                              />
+                              <button className="text-button" type="button" onClick={() => void saveProductReorderLevel(product.id)}>{t('save')}</button>
+                            </div>
+                          </td>
                         </tr>
                       ))}
                       {products.length === 0 && !inventoryLoading && (
