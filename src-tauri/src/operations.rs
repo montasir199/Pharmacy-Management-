@@ -54,9 +54,20 @@ pub struct SaleItemDetail {
     pub product_name_ar: String,
     pub product_name_en: String,
     pub quantity: i64,
+    pub base_quantity: i64,
+    pub sale_unit_name: String,
     pub unit_price_minor: i64,
     pub discount_minor: i64,
     pub line_total_minor: i64,
+    pub batches: Vec<SaleItemBatchDetail>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SaleItemBatchDetail {
+    pub batch_number: String,
+    pub expiry_date: String,
+    pub units: i64,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -270,6 +281,58 @@ pub struct SaleCartItem {
     pub discount_basis_points: i64,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SaleUnitCartItem {
+    pub product_id: i64,
+    pub sale_unit_id: i64,
+    pub quantity: i64,
+    pub discount_type: String,
+    pub discount_value: i64,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PosDraftItem {
+    pub product_id: i64,
+    pub sale_unit_id: Option<i64>,
+    pub sold_quantity: i64,
+    pub base_units_per_unit: i64,
+    pub unit_price_minor: i64,
+    pub discount_type: String,
+    pub discount_value: i64,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PosDraft {
+    pub id: i64,
+    pub created_at: String,
+    pub updated_at: String,
+    pub customer_id: Option<i64>,
+    pub note: String,
+    pub currency_code: String,
+    pub exchange_rate_scaled: i64,
+    pub payment_method: String,
+    pub cash_paid_minor: i64,
+    pub card_paid_minor: i64,
+    pub bank_transfer_paid_minor: i64,
+    pub items: Vec<PosDraftItem>,
+}
+
+#[derive(Debug)]
+struct PreparedSaleItem {
+    product_id: i64,
+    sale_unit_id: i64,
+    quantity: i64,
+    base_quantity: i64,
+    unit_price_minor: i64,
+    line_discount: i64,
+    line_subtotal: i64,
+    line_total: i64,
+    allocations: Vec<crate::inventory::BatchAllocation>,
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CreatedSale {
@@ -287,11 +350,56 @@ pub fn create_sale(
     currency_code: &str,
     exchange_rate_scaled: i64,
 ) -> Result<CreatedSale, String> {
+    let items = items
+        .iter()
+        .map(|item| {
+            let sale_unit_id = connection
+                .query_row(
+                    "SELECT id FROM product_sale_units
+                     WHERE product_id = ?1 AND is_base_unit = 1",
+                    [item.product_id],
+                    |row| row.get(0),
+                )
+                .map_err(|error| error.to_string())?;
+            Ok(SaleUnitCartItem {
+                product_id: item.product_id,
+                sale_unit_id,
+                quantity: item.quantity,
+                discount_type: "percent".to_owned(),
+                discount_value: item.discount_basis_points,
+            })
+        })
+        .collect::<Result<Vec<_>, String>>()?;
+    create_sale_with_units(
+        connection,
+        customer_id,
+        &items,
+        status,
+        payments,
+        currency_code,
+        exchange_rate_scaled,
+    )
+}
+
+pub fn create_sale_with_units(
+    connection: &mut Connection,
+    customer_id: Option<i64>,
+    items: &[SaleUnitCartItem],
+    status: &str,
+    payments: &[SalePaymentInput],
+    currency_code: &str,
+    exchange_rate_scaled: i64,
+) -> Result<CreatedSale, String> {
     if items.is_empty()
         || items.iter().any(|item| {
             item.product_id <= 0
+                || item.sale_unit_id <= 0
                 || item.quantity <= 0
-                || !(0..=10000).contains(&item.discount_basis_points)
+                || match item.discount_type.as_str() {
+                    "percent" => !(0..=10000).contains(&item.discount_value),
+                    "amount" => item.discount_value < 0,
+                    _ => true,
+                }
         })
         || status != "paid"
         || payments.is_empty()
@@ -341,15 +449,21 @@ pub fn create_sale(
     if !(0..=10000).contains(&tax_rate_basis_points) {
         return Err("Invalid configured tax rate".to_owned());
     }
-    let items = items
+    let mut items = items
         .iter()
         .map(|item| {
-            let unit_price_minor = transaction
+            let (base_units_per_unit, unit_price_minor) = transaction
                 .query_row(
-                    "SELECT sale_price_minor FROM products
-                     WHERE id = ?1 AND is_enabled = 1",
-                    [item.product_id],
-                    |row| row.get::<_, i64>(0),
+                    "SELECT product_sale_units.base_units_per_unit,
+                            product_sale_units.sale_price_minor
+                     FROM product_sale_units
+                     JOIN products ON products.id = product_sale_units.product_id
+                     WHERE product_sale_units.id = ?1
+                       AND product_sale_units.product_id = ?2
+                       AND product_sale_units.is_enabled = 1
+                       AND products.is_enabled = 1",
+                    params![item.sale_unit_id, item.product_id],
+                    |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)),
                 )
                 .map_err(|error| error.to_string())?;
             if unit_price_minor <= 0 {
@@ -359,18 +473,30 @@ pub fn create_sale(
                 .quantity
                 .checked_mul(unit_price_minor)
                 .ok_or_else(|| "Sale line total overflow".to_owned())?;
-            let line_discount = rounded_ratio(line_subtotal, item.discount_basis_points, 10000)?;
+            let line_discount = match item.discount_type.as_str() {
+                "percent" => rounded_ratio(line_subtotal, item.discount_value, 10000)?,
+                "amount" if item.discount_value <= line_subtotal => item.discount_value,
+                "amount" => return Err("Sale discount exceeds line total".to_owned()),
+                _ => return Err("Invalid sale discount type".to_owned()),
+            };
             let line_total = line_subtotal
                 .checked_sub(line_discount)
                 .ok_or_else(|| "Sale discount exceeds line total".to_owned())?;
-            Ok((
-                item.product_id,
-                item.quantity,
+            let base_quantity = item
+                .quantity
+                .checked_mul(base_units_per_unit)
+                .ok_or_else(|| "Sale quantity overflow".to_owned())?;
+            Ok(PreparedSaleItem {
+                product_id: item.product_id,
+                sale_unit_id: item.sale_unit_id,
+                quantity: item.quantity,
+                base_quantity,
                 unit_price_minor,
                 line_discount,
                 line_subtotal,
                 line_total,
-            ))
+                allocations: Vec::new(),
+            })
         })
         .collect::<Result<Vec<_>, String>>()?;
     let business_date: String = transaction
@@ -383,11 +509,11 @@ pub fn create_sale(
         .map_err(|error| error.to_string())?;
     let invoice_number = format!("INV-{}-{next_sale_id:06}", business_date.replace('-', ""));
     if status == "paid" {
-        for (product_id, quantity, _, _, _, _) in &items {
-            crate::inventory::dispense_fefo_in_transaction(
+        for item in &mut items {
+            item.allocations = crate::inventory::dispense_fefo_in_transaction(
                 &transaction,
-                *product_id,
-                *quantity,
+                item.product_id,
+                item.base_quantity,
                 &business_date,
                 &invoice_number,
             )
@@ -396,15 +522,11 @@ pub fn create_sale(
     }
     let subtotal = items
         .iter()
-        .try_fold(0_i64, |sum, (_, _, _, _, line_subtotal, _)| {
-            sum.checked_add(*line_subtotal)
-        })
+        .try_fold(0_i64, |sum, item| sum.checked_add(item.line_subtotal))
         .ok_or_else(|| "Sale total overflow".to_owned())?;
     let discount = items
         .iter()
-        .try_fold(0_i64, |sum, (_, _, _, line_discount, _, _)| {
-            sum.checked_add(*line_discount)
-        })
+        .try_fold(0_i64, |sum, item| sum.checked_add(item.line_discount))
         .ok_or_else(|| "Sale discount overflow".to_owned())?;
     let taxable_subtotal = subtotal
         .checked_sub(discount)
@@ -443,22 +565,35 @@ pub fn create_sale(
         )
         .map_err(|error| error.to_string())?;
     let sale_id = transaction.last_insert_rowid();
-    for (product_id, quantity, unit_price, line_discount, _, line_total) in items {
+    for item in items {
         transaction
             .execute(
                 "INSERT INTO sale_items
-             (sale_id, product_id, quantity, unit_price_minor, line_total_minor, discount_minor)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+             (sale_id, product_id, quantity, unit_price_minor, line_total_minor, discount_minor,
+              sale_unit_id, sold_quantity)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
                 params![
                     sale_id,
-                    product_id,
-                    quantity,
-                    unit_price,
-                    line_total,
-                    line_discount
+                    item.product_id,
+                    item.base_quantity,
+                    item.unit_price_minor,
+                    item.line_total,
+                    item.line_discount,
+                    item.sale_unit_id,
+                    item.quantity
                 ],
             )
             .map_err(|error| error.to_string())?;
+        let sale_item_id = transaction.last_insert_rowid();
+        for allocation in item.allocations {
+            transaction
+                .execute(
+                    "INSERT INTO sale_item_batches (sale_item_id, batch_id, units)
+                     VALUES (?1, ?2, ?3)",
+                    params![sale_item_id, allocation.batch_id, allocation.units],
+                )
+                .map_err(|error| error.to_string())?;
+        }
     }
     for payment in payments {
         transaction
@@ -558,27 +693,59 @@ pub fn get_sale(connection: &Connection, sale_id: i64) -> Result<SaleDetail, Str
 
     let mut items = connection
         .prepare(
-            "SELECT products.name_ar, products.name_en,
-                    sale_items.quantity, sale_items.unit_price_minor,
-                    sale_items.discount_minor, sale_items.line_total_minor
-             FROM sale_items JOIN products ON products.id = sale_items.product_id
+            "SELECT sale_items.id, products.name_ar, products.name_en,
+                    sale_items.sold_quantity, sale_items.quantity,
+                    COALESCE(product_sale_units.name, products.base_unit),
+                    sale_items.unit_price_minor, sale_items.discount_minor, sale_items.line_total_minor
+             FROM sale_items
+             JOIN products ON products.id = sale_items.product_id
+             LEFT JOIN product_sale_units ON product_sale_units.id = sale_items.sale_unit_id
              WHERE sale_items.sale_id = ?1 ORDER BY sale_items.id",
         )
         .map_err(|error| error.to_string())?;
-    detail.items = items
+    let item_rows = items
         .query_map([sale_id], |row| {
-            Ok(SaleItemDetail {
-                product_name_ar: row.get(0)?,
-                product_name_en: row.get(1)?,
-                quantity: row.get(2)?,
-                unit_price_minor: row.get(3)?,
-                discount_minor: row.get(4)?,
-                line_total_minor: row.get(5)?,
-            })
+            Ok((
+                row.get::<_, i64>(0)?,
+                SaleItemDetail {
+                    product_name_ar: row.get(1)?,
+                    product_name_en: row.get(2)?,
+                    quantity: row.get(3)?,
+                    base_quantity: row.get(4)?,
+                    sale_unit_name: row.get(5)?,
+                    unit_price_minor: row.get(6)?,
+                    discount_minor: row.get(7)?,
+                    line_total_minor: row.get(8)?,
+                    batches: Vec::new(),
+                },
+            ))
         })
         .map_err(|error| error.to_string())?
         .collect::<Result<Vec<_>, _>>()
         .map_err(|error| error.to_string())?;
+    for (item_id, mut item) in item_rows {
+        let mut batches = connection
+            .prepare(
+                "SELECT batches.batch_number, batches.expiry_date, sale_item_batches.units
+                 FROM sale_item_batches
+                 JOIN batches ON batches.id = sale_item_batches.batch_id
+                 WHERE sale_item_batches.sale_item_id = ?1
+                 ORDER BY batches.expiry_date, batches.id",
+            )
+            .map_err(|error| error.to_string())?;
+        item.batches = batches
+            .query_map([item_id], |row| {
+                Ok(SaleItemBatchDetail {
+                    batch_number: row.get(0)?,
+                    expiry_date: row.get(1)?,
+                    units: row.get(2)?,
+                })
+            })
+            .map_err(|error| error.to_string())?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|error| error.to_string())?;
+        detail.items.push(item);
+    }
 
     let mut payments = connection
         .prepare(
@@ -598,6 +765,196 @@ pub fn get_sale(connection: &Connection, sale_id: i64) -> Result<SaleDetail, Str
         .collect::<Result<Vec<_>, _>>()
         .map_err(|error| error.to_string())?;
     Ok(detail)
+}
+
+pub fn list_pos_drafts(connection: &Connection) -> Result<Vec<PosDraft>, String> {
+    let mut statement = connection
+        .prepare("SELECT id FROM pos_drafts ORDER BY updated_at, id")
+        .map_err(|error| error.to_string())?;
+    let draft_ids = statement
+        .query_map([], |row| row.get::<_, i64>(0))
+        .map_err(|error| error.to_string())?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| error.to_string())?;
+    draft_ids
+        .into_iter()
+        .map(|draft_id| get_pos_draft(connection, draft_id))
+        .collect()
+}
+
+pub fn create_pos_draft(connection: &Connection) -> Result<PosDraft, String> {
+    connection
+        .execute("INSERT INTO pos_drafts DEFAULT VALUES", [])
+        .map_err(|error| error.to_string())?;
+    get_pos_draft(connection, connection.last_insert_rowid())
+}
+
+pub fn get_pos_draft(connection: &Connection, draft_id: i64) -> Result<PosDraft, String> {
+    let mut draft = connection
+        .query_row(
+            "SELECT id, created_at, updated_at, customer_id, note, currency_code,
+                    exchange_rate_scaled, payment_method, cash_paid_minor,
+                    card_paid_minor, bank_transfer_paid_minor
+             FROM pos_drafts WHERE id = ?1",
+            [draft_id],
+            |row| {
+                Ok(PosDraft {
+                    id: row.get(0)?,
+                    created_at: row.get(1)?,
+                    updated_at: row.get(2)?,
+                    customer_id: row.get(3)?,
+                    note: row.get(4)?,
+                    currency_code: row.get(5)?,
+                    exchange_rate_scaled: row.get(6)?,
+                    payment_method: row.get(7)?,
+                    cash_paid_minor: row.get(8)?,
+                    card_paid_minor: row.get(9)?,
+                    bank_transfer_paid_minor: row.get(10)?,
+                    items: Vec::new(),
+                })
+            },
+        )
+        .optional()
+        .map_err(|error| error.to_string())?
+        .ok_or_else(|| "POS draft was not found".to_owned())?;
+    let mut statement = connection
+        .prepare(
+            "SELECT product_id, sale_unit_id, sold_quantity, base_units_per_unit,
+                    unit_price_minor, discount_type, discount_value
+             FROM pos_draft_items WHERE draft_id = ?1 ORDER BY position",
+        )
+        .map_err(|error| error.to_string())?;
+    draft.items = statement
+        .query_map([draft_id], |row| {
+            Ok(PosDraftItem {
+                product_id: row.get(0)?,
+                sale_unit_id: row.get(1)?,
+                sold_quantity: row.get(2)?,
+                base_units_per_unit: row.get(3)?,
+                unit_price_minor: row.get(4)?,
+                discount_type: row.get(5)?,
+                discount_value: row.get(6)?,
+            })
+        })
+        .map_err(|error| error.to_string())?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| error.to_string())?;
+    Ok(draft)
+}
+
+pub fn save_pos_draft(connection: &mut Connection, draft: &PosDraft) -> Result<(), String> {
+    if draft.id <= 0
+        || draft.note.chars().count() > 2000
+        || draft.exchange_rate_scaled <= 0
+        || !matches!(
+            draft.payment_method.as_str(),
+            "cash" | "card" | "bank_transfer" | "mixed"
+        )
+        || [
+            draft.cash_paid_minor,
+            draft.card_paid_minor,
+            draft.bank_transfer_paid_minor,
+        ]
+        .iter()
+        .any(|amount| *amount < 0)
+    {
+        return Err("Invalid POS draft details".to_owned());
+    }
+
+    for item in &draft.items {
+        if item.product_id <= 0
+            || item.sale_unit_id.is_some_and(|id| id <= 0)
+            || item.sold_quantity <= 0
+            || item.base_units_per_unit <= 0
+            || item.unit_price_minor < 0
+            || match item.discount_type.as_str() {
+                "percent" => !(0..=10000).contains(&item.discount_value),
+                "amount" => item.discount_value < 0,
+                _ => true,
+            }
+        {
+            return Err("Invalid POS draft item".to_owned());
+        }
+        let line_subtotal = item
+            .sold_quantity
+            .checked_mul(item.unit_price_minor)
+            .ok_or_else(|| "POS draft line total overflow".to_owned())?;
+        if item.discount_type == "amount" && item.discount_value > line_subtotal {
+            return Err("POS draft discount exceeds line total".to_owned());
+        }
+    }
+
+    let transaction = connection
+        .transaction_with_behavior(TransactionBehavior::Immediate)
+        .map_err(|error| error.to_string())?;
+    let updated = transaction
+        .execute(
+            "UPDATE pos_drafts
+             SET customer_id = ?1, note = ?2, currency_code = ?3, exchange_rate_scaled = ?4,
+                 payment_method = ?5, cash_paid_minor = ?6, card_paid_minor = ?7,
+                 bank_transfer_paid_minor = ?8,
+                 updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+             WHERE id = ?9",
+            params![
+                draft.customer_id,
+                draft.note.trim(),
+                draft.currency_code,
+                draft.exchange_rate_scaled,
+                draft.payment_method,
+                draft.cash_paid_minor,
+                draft.card_paid_minor,
+                draft.bank_transfer_paid_minor,
+                draft.id
+            ],
+        )
+        .map_err(|error| error.to_string())?;
+    if updated == 0 {
+        return Err("POS draft was not found".to_owned());
+    }
+
+    transaction
+        .execute(
+            "DELETE FROM pos_draft_items WHERE draft_id = ?1",
+            [draft.id],
+        )
+        .map_err(|error| error.to_string())?;
+    for (position, item) in draft.items.iter().enumerate() {
+        let position =
+            i64::try_from(position).map_err(|_| "Too many POS draft items".to_owned())?;
+        transaction
+            .execute(
+                "INSERT INTO pos_draft_items
+                 (draft_id, position, product_id, sale_unit_id, sold_quantity,
+                  base_units_per_unit, unit_price_minor, discount_type, discount_value)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+                params![
+                    draft.id,
+                    position,
+                    item.product_id,
+                    item.sale_unit_id,
+                    item.sold_quantity,
+                    item.base_units_per_unit,
+                    item.unit_price_minor,
+                    item.discount_type,
+                    item.discount_value
+                ],
+            )
+            .map_err(|error| error.to_string())?;
+    }
+    transaction.commit().map_err(|error| error.to_string())
+}
+
+pub fn delete_pos_draft(connection: &Connection, draft_id: i64) -> Result<(), String> {
+    if draft_id <= 0 {
+        return Err("Invalid POS draft id".to_owned());
+    }
+    let deleted = connection
+        .execute("DELETE FROM pos_drafts WHERE id = ?1", [draft_id])
+        .map_err(|error| error.to_string())?;
+    if deleted == 0 {
+        return Err("POS draft was not found".to_owned());
+    }
+    Ok(())
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -959,6 +1316,111 @@ mod tests {
                 .as_deref(),
             Some("mixed")
         );
+    }
+
+    #[test]
+    fn package_sale_uses_its_price_and_persists_fefo_allocations_atomically() {
+        let (_directory, mut connection, product_id) = setup();
+        let package_id =
+            inventory::save_product_sale_unit(&connection, product_id, None, "شريط", 10, 1800)
+                .expect("create package sale unit");
+        inventory::receive_batch(
+            &mut connection,
+            product_id,
+            "LOT-PACK",
+            "2999-12-31",
+            20,
+            "initial-stock",
+        )
+        .expect("receive package stock");
+
+        let sale = create_sale_with_units(
+            &mut connection,
+            None,
+            &[SaleUnitCartItem {
+                product_id,
+                sale_unit_id: package_id,
+                quantity: 2,
+                discount_type: "amount".to_owned(),
+                discount_value: 100,
+            }],
+            "paid",
+            &[SalePaymentInput {
+                method: "cash".to_owned(),
+                amount_minor: 3500,
+                currency_code: "SAR".to_owned(),
+            }],
+            "SAR",
+            1_000_000_000,
+        )
+        .expect("record package sale");
+
+        assert_eq!(sale.total_minor, 3500);
+        assert_eq!(
+            inventory::list_products(&connection).expect("list stock")[0].available_units,
+            0
+        );
+        let detail = get_sale(&connection, sale.id).expect("read package sale");
+        assert_eq!(detail.items[0].quantity, 2);
+        assert_eq!(detail.items[0].base_quantity, 20);
+        assert_eq!(detail.items[0].sale_unit_name, "شريط");
+        assert_eq!(detail.items[0].unit_price_minor, 1800);
+        assert_eq!(detail.items[0].discount_minor, 100);
+        assert_eq!(detail.items[0].batches.len(), 1);
+        assert_eq!(detail.items[0].batches[0].batch_number, "LOT-PACK");
+        assert_eq!(detail.items[0].batches[0].units, 20);
+    }
+
+    #[test]
+    fn pos_drafts_persist_independent_invoices_and_reject_invalid_updates() {
+        let (_directory, mut connection, product_id) = setup();
+        let package_id =
+            inventory::save_product_sale_unit(&connection, product_id, None, "شريط", 10, 1800)
+                .expect("create package sale unit");
+        let draft = create_pos_draft(&connection).expect("create POS draft");
+        let mut updated_draft = PosDraft {
+            customer_id: None,
+            note: "طلب عميل".to_owned(),
+            currency_code: "SAR".to_owned(),
+            exchange_rate_scaled: 1_000_000_000,
+            payment_method: "mixed".to_owned(),
+            cash_paid_minor: 1000,
+            card_paid_minor: 500,
+            bank_transfer_paid_minor: 0,
+            items: vec![PosDraftItem {
+                product_id,
+                sale_unit_id: Some(package_id),
+                sold_quantity: 2,
+                base_units_per_unit: 10,
+                unit_price_minor: 1800,
+                discount_type: "amount".to_owned(),
+                discount_value: 100,
+            }],
+            ..draft.clone()
+        };
+        save_pos_draft(&mut connection, &updated_draft).expect("save POS draft");
+        let saved_draft = get_pos_draft(&connection, draft.id).expect("reload POS draft");
+        assert_eq!(saved_draft.note, "طلب عميل");
+        assert_eq!(saved_draft.payment_method, "mixed");
+        assert_eq!(saved_draft.cash_paid_minor, 1000);
+        assert_eq!(saved_draft.card_paid_minor, 500);
+        assert_eq!(saved_draft.items[0].sale_unit_id, Some(package_id));
+        assert_eq!(saved_draft.items[0].sold_quantity, 2);
+        assert_eq!(list_pos_drafts(&connection).expect("list drafts").len(), 1);
+
+        updated_draft.items[0].discount_value = 10_000;
+        assert!(save_pos_draft(&mut connection, &updated_draft).is_err());
+        assert_eq!(
+            get_pos_draft(&connection, draft.id)
+                .expect("read unchanged draft")
+                .items[0]
+                .discount_value,
+            100
+        );
+        delete_pos_draft(&connection, draft.id).expect("delete completed draft");
+        assert!(list_pos_drafts(&connection)
+            .expect("list remaining drafts")
+            .is_empty());
     }
 
     #[test]

@@ -190,7 +190,15 @@ mod tests {
                  JOIN product_sale_units ON product_sale_units.product_id = products.id
                  JOIN sale_items ON sale_items.product_id = products.id",
                 [],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?)),
+                |row| {
+                    Ok((
+                        row.get(0)?,
+                        row.get(1)?,
+                        row.get(2)?,
+                        row.get(3)?,
+                        row.get(4)?,
+                    ))
+                },
             )
             .expect("read migrated POS records");
 

@@ -23,12 +23,13 @@ fn create_product(
     base_unit: String,
     reorder_level_units: i64,
     sale_price_minor: i64,
+    category: Option<String>,
 ) -> Result<i64, String> {
     let connection = state
         .connection
         .lock()
         .map_err(|_| "database state is unavailable".to_owned())?;
-    inventory::create_product(
+    inventory::create_product_with_category(
         &connection,
         &sku,
         barcode.as_deref(),
@@ -36,6 +37,45 @@ fn create_product(
         &name_en,
         &base_unit,
         reorder_level_units,
+        sale_price_minor,
+        category.as_deref(),
+    )
+    .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn update_product_category(
+    state: tauri::State<'_, DatabaseState>,
+    product_id: i64,
+    category: String,
+) -> Result<(), String> {
+    let connection = state
+        .connection
+        .lock()
+        .map_err(|_| "database state is unavailable".to_owned())?;
+    inventory::update_product_category(&connection, product_id, &category)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn save_product_sale_unit(
+    state: tauri::State<'_, DatabaseState>,
+    product_id: i64,
+    sale_unit_id: Option<i64>,
+    name: String,
+    base_units_per_unit: i64,
+    sale_price_minor: i64,
+) -> Result<i64, String> {
+    let connection = state
+        .connection
+        .lock()
+        .map_err(|_| "database state is unavailable".to_owned())?;
+    inventory::save_product_sale_unit(
+        &connection,
+        product_id,
+        sale_unit_id,
+        &name,
+        base_units_per_unit,
         sale_price_minor,
     )
     .map_err(|error| error.to_string())
@@ -200,6 +240,49 @@ fn list_currencies(
 }
 
 #[tauri::command]
+fn list_pos_drafts(
+    state: tauri::State<'_, DatabaseState>,
+) -> Result<Vec<operations::PosDraft>, String> {
+    let connection = state
+        .connection
+        .lock()
+        .map_err(|_| "database state is unavailable".to_owned())?;
+    operations::list_pos_drafts(&connection)
+}
+
+#[tauri::command]
+fn create_pos_draft(
+    state: tauri::State<'_, DatabaseState>,
+) -> Result<operations::PosDraft, String> {
+    let connection = state
+        .connection
+        .lock()
+        .map_err(|_| "database state is unavailable".to_owned())?;
+    operations::create_pos_draft(&connection)
+}
+
+#[tauri::command]
+fn save_pos_draft(
+    state: tauri::State<'_, DatabaseState>,
+    draft: operations::PosDraft,
+) -> Result<(), String> {
+    let mut connection = state
+        .connection
+        .lock()
+        .map_err(|_| "database state is unavailable".to_owned())?;
+    operations::save_pos_draft(&mut connection, &draft)
+}
+
+#[tauri::command]
+fn delete_pos_draft(state: tauri::State<'_, DatabaseState>, draft_id: i64) -> Result<(), String> {
+    let connection = state
+        .connection
+        .lock()
+        .map_err(|_| "database state is unavailable".to_owned())?;
+    operations::delete_pos_draft(&connection, draft_id)
+}
+
+#[tauri::command]
 fn get_sale(
     state: tauri::State<'_, DatabaseState>,
     sale_id: i64,
@@ -287,6 +370,31 @@ fn create_sale(
         .lock()
         .map_err(|_| "database state is unavailable".to_owned())?;
     operations::create_sale(
+        &mut connection,
+        customer_id,
+        &items,
+        &status,
+        &payments,
+        &currency_code,
+        exchange_rate_scaled,
+    )
+}
+
+#[tauri::command]
+fn create_sale_with_units(
+    state: tauri::State<'_, DatabaseState>,
+    customer_id: Option<i64>,
+    items: Vec<operations::SaleUnitCartItem>,
+    status: String,
+    payments: Vec<operations::SalePaymentInput>,
+    currency_code: String,
+    exchange_rate_scaled: i64,
+) -> Result<operations::CreatedSale, String> {
+    let mut connection = state
+        .connection
+        .lock()
+        .map_err(|_| "database state is unavailable".to_owned())?;
+    operations::create_sale_with_units(
         &mut connection,
         customer_id,
         &items,
@@ -451,6 +559,8 @@ fn main() {
         })
         .invoke_handler(tauri::generate_handler![
             create_product,
+            update_product_category,
+            save_product_sale_unit,
             update_product_sale_price,
             update_product_reorder_level,
             receive_batch,
@@ -463,12 +573,17 @@ fn main() {
             list_purchases,
             list_sales,
             list_currencies,
+            list_pos_drafts,
+            create_pos_draft,
+            save_pos_draft,
+            delete_pos_draft,
             get_sale,
             create_purchase,
             get_setting,
             set_setting,
             set_settings,
             create_sale,
+            create_sale_with_units,
             list_printers,
             save_printer,
             remove_printer,
