@@ -137,7 +137,7 @@ describe('main application shell', () => {
     expect(await screen.findByText('Paracetamol')).toBeInTheDocument()
 
     await user.type(screen.getByRole('textbox', { name: 'ابحث عن دواء أو رمز منتج...' }), 'missing')
-    expect(screen.queryByText('Paracetamol')).not.toBeInTheDocument()
+    expect(screen.queryByText('باراسيتامول')).not.toBeInTheDocument()
   })
 
   it('shows catalog metrics and filters products by low stock and expiry', async () => {
@@ -160,12 +160,12 @@ describe('main application shell', () => {
     expect(screen.getByText('628100')).toBeInTheDocument()
 
     await user.click(screen.getByRole('button', { name: /مخزون منخفض/ }))
-    expect(screen.getByText('Amoxicillin')).toBeInTheDocument()
+    expect(screen.getByText('أموكسيسيلين')).toBeInTheDocument()
     expect(screen.queryByText('Paracetamol')).not.toBeInTheDocument()
 
     await user.click(screen.getByRole('button', { name: /قريب الانتهاء/ }))
-    expect(screen.getByText('Vitamin D')).toBeInTheDocument()
-    expect(screen.queryByText('Amoxicillin')).not.toBeInTheDocument()
+    expect(screen.getByText('فيتامين د')).toBeInTheDocument()
+    expect(screen.queryByText('أموكسيسيلين')).not.toBeInTheDocument()
   })
 
   it('highlights products at or below their reorder threshold', async () => {
@@ -429,8 +429,8 @@ describe('main application shell', () => {
 
     const search = await screen.findByRole('textbox', { name: 'ابحث عن منتج أو رمز...' })
     await user.type(search, '٦٢٨١٠٠')
-    expect(screen.getByText('Paracetamol')).toBeInTheDocument()
-    expect(screen.queryByText('Amoxicillin')).not.toBeInTheDocument()
+    expect(screen.getByText('باراسيتامول')).toBeInTheDocument()
+    expect(screen.queryByText('أموكسيسيلين')).not.toBeInTheDocument()
 
     await user.clear(search)
     await user.click(screen.getByRole('button', { name: /مخزون منخفض/ }))
