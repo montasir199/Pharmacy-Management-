@@ -105,12 +105,27 @@ jobs:
             }
           } | ConvertTo-Json -Depth 5
           Set-Content -Path "$bundleDir/latest.json" -Value $manifest -Encoding utf8
-          gh release delete $tag --yes --cleanup-tag 2>$null
-          gh release create $tag `
-            --target "${{ github.sha }}" `
-            --title "Dawai Pharmacy $version" `
-            --notes "Signed Windows installer for Dawai Pharmacy $version" `
-            "$($installer.FullName)" "$bundleDir/latest.json"
+          gh release view $tag *> $null
+          if ($LASTEXITCODE -eq 0) {
+            gh release edit $tag `
+              --title "Dawai Pharmacy $version" `
+              --notes "Signed Windows installer for Dawai Pharmacy $version"
+            if ($LASTEXITCODE -ne 0) {
+              throw "Could not update the existing GitHub release $tag"
+            }
+          } else {
+            gh release create $tag `
+              --target "${{ github.sha }}" `
+              --title "Dawai Pharmacy $version" `
+              --notes "Signed Windows installer for Dawai Pharmacy $version"
+            if ($LASTEXITCODE -ne 0) {
+              throw "Could not create GitHub release $tag"
+            }
+          }
+          gh release upload $tag "$($installer.FullName)" "$bundleDir/latest.json" --clobber
+          if ($LASTEXITCODE -ne 0) {
+            throw "Could not upload the signed installer and update manifest to $tag"
+          }
 
       - name: Upload Windows installer
         uses: actions/upload-artifact@v4
