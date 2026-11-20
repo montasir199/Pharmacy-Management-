@@ -170,6 +170,24 @@ describe('main application shell', () => {
     })
   })
 
+  it('updates the product reorder threshold through the local database command', async () => {
+    const user = userEvent.setup()
+    render(<App />)
+    await user.click(screen.getByRole('button', { name: 'المخزون' }))
+
+    const reorderInput = await screen.findByRole('spinbutton', { name: 'حد إعادة الطلب باراسيتامول' })
+    await user.clear(reorderInput)
+    await user.type(reorderInput, '12')
+    await user.click(screen.getByRole('button', { name: 'حفظ' }))
+
+    await waitFor(() => {
+      expect(invokeMock).toHaveBeenCalledWith('update_product_reorder_level', {
+        productId: 1,
+        reorderLevelUnits: 12,
+      })
+    })
+  })
+
   it('saves the pharmacy name through persistent settings', async () => {
     const user = userEvent.setup()
     render(<App />)
