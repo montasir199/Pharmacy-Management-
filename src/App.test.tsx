@@ -206,6 +206,7 @@ describe('main application shell', () => {
     render(<App />)
     await user.click(screen.getByRole('button', { name: 'الإعدادات' }))
 
+    await user.type(await screen.findByLabelText('اسم الصيدلية'), 'صيدلية الاختبار')
     await user.selectOptions(await screen.findByLabelText('العملة الافتراضية للنظام'), 'USD')
     await user.clear(screen.getByLabelText('سعر الصرف الافتراضي'))
     await user.type(screen.getByLabelText('سعر الصرف الافتراضي'), '3.75')
