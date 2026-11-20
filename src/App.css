@@ -2589,3 +2589,39 @@ button:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-vis
   .expiry-product-name { grid-column: 1 / -1; }
   .expiry-days { justify-self: start; }
 }
+
+
+.low-stock-alert-panel {
+  grid-column: 1 / -1;
+  padding: 19px 21px;
+  border-color: color-mix(in srgb, #b66d5e 38%, var(--line));
+  background: linear-gradient(120deg, var(--surface), color-mix(in srgb, #f7eeeb 44%, var(--surface)));
+}
+.low-stock-alert-panel .panel-heading { margin-bottom: 12px; }
+.low-stock-count { color: #955b4f; background: #f7eeeb; }
+.low-stock-alert-list { display: grid; gap: 8px; }
+.low-stock-alert-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 14px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface);
+}
+.low-stock-quantity {
+  color: #955b4f;
+  background: #f7eeeb;
+  border-radius: 999px;
+  padding: 5px 10px;
+  font-size: 12px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+.app-shell[data-theme="dark"] .low-stock-count,
+.app-shell[data-theme="dark"] .low-stock-quantity { color: #efb6a9; background: #422d2b; }
+@media (max-width: 600px) {
+  .low-stock-alert-panel { padding: 15px; }
+  .low-stock-alert-item { align-items: flex-start; flex-direction: column; gap: 8px; }
+}
