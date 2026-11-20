@@ -1417,7 +1417,7 @@ function App() {
                 <button className="dashboard-refresh-button" type="button" aria-label={isArabic ? 'تحديث بيانات لوحة التحكم' : 'Refresh dashboard data'} title={isArabic ? 'تحديث البيانات' : 'Refresh data'} onClick={() => { void refreshDashboard(); void refreshProducts() }}>
                   <RefreshCw size={17} />
                 </button>
-                <button className="dashboard-secondary-button" type="button" onClick={() => setActivePage('inventory')}>
+                <button className="dashboard-secondary-button" type="button" aria-label={isArabic ? 'فتح صفحة المخزون' : 'Open inventory page'} onClick={() => setActivePage('inventory')}>
                   <Boxes size={17} />
                   {t('nav.inventory')}
                 </button>
