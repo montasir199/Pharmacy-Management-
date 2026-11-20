@@ -1431,7 +1431,7 @@ function App() {
                   </div>
                 </div>
                 <div className="chart-summary">
-                  <strong>{formatMoney(dashboard?.dailySales.reduce((sum, day) => sum + day.totalMinor, 0) ?? 0)}</strong>
+                  <strong>{formatMoney((dashboard?.dailySales ?? []).reduce((sum, day) => sum + day.totalMinor, 0))}</strong>
                   <span className="chart-legend"><i /> {t('sales')}</span>
                 </div>
                 <div className="chart" role="img" aria-label={t('salesChart')}>
