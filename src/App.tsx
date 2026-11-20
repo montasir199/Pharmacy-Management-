@@ -325,6 +325,9 @@ function App() {
       return days >= 0 && days <= 90
     })
     .sort((left, right) => (left.nearestExpiryDate ?? '').localeCompare(right.nearestExpiryDate ?? ''))
+  const lowStockProducts = products
+    .filter((product) => product.availableUnits <= product.reorderLevelUnits)
+    .sort((left, right) => left.availableUnits - right.availableUnits)
   const dailySales = dashboard?.dailySales ?? []
   const chartMax = Math.max(...dailySales.map((day) => day.totalMinor), 0)
   const invoiceCurrencyExponent = currencies.find((currency) => currency.code === saleCurrencyCode)?.minorUnitExponent ?? 2
@@ -1566,6 +1569,32 @@ function App() {
                       </div>
                     )
                   })}
+                </div>
+              </section>
+            )}
+
+            {lowStockProducts.length > 0 && (
+              <section className="panel low-stock-alert-panel" aria-live="polite">
+                <div className="panel-heading">
+                  <div>
+                    <h3>{t('lowStockHeading')}</h3>
+                    <p>{t('lowStockDescription')}</p>
+                  </div>
+                  <span className="inventory-count low-stock-count">{lowStockProducts.length}</span>
+                </div>
+                <div className="low-stock-alert-list">
+                  {lowStockProducts.map((product) => (
+                    <div className="low-stock-alert-item" key={product.id}>
+                      <div className="expiry-product-name">
+                        <strong>{isArabic ? product.nameAr : product.nameEn}</strong>
+                        <small>{product.sku}</small>
+                      </div>
+                      <span className="low-stock-quantity">{t('stockQuantitySummary', {
+                        available: product.availableUnits,
+                        reorder: product.reorderLevelUnits,
+                      })}</span>
+                    </div>
+                  ))}
                 </div>
               </section>
             )}
