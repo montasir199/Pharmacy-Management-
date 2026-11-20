@@ -433,6 +433,38 @@ describe('main application shell', () => {
     expect(screen.queryByText('PO-1001')).not.toBeInTheDocument()
   })
 
+  it('filters sales reports by period and customer without mixing currencies', async () => {
+    const user = userEvent.setup()
+    const now = Date.now()
+    const recent = new Date(now - 2 * 86_400_000).toISOString()
+    const old = new Date(now - 45 * 86_400_000).toISOString()
+    const originalInvoke = invokeMock.getMockImplementation()
+    invokeMock.mockImplementation((command: string, args: Record<string, unknown>) => {
+      if (command === 'list_sales') return Promise.resolve([
+        { id: 1, invoiceNumber: 'INV-1001', customerName: 'أحمد', soldAt: recent, totalMinor: 1250, status: 'paid', currencyCode: 'SAR', exchangeRateScaled: 1000000000, paymentMethod: 'cash' },
+        { id: 2, invoiceNumber: 'INV-1002', customerName: 'سارة', soldAt: recent, totalMinor: 3000, status: 'paid', currencyCode: 'SAR', exchangeRateScaled: 1000000000, paymentMethod: 'card' },
+        { id: 3, invoiceNumber: 'INV-1003', customerName: 'USD customer', soldAt: recent, totalMinor: 9000, status: 'paid', currencyCode: 'USD', exchangeRateScaled: 1000000000, paymentMethod: 'cash' },
+        { id: 4, invoiceNumber: 'INV-1004', customerName: 'قديم', soldAt: old, totalMinor: 7000, status: 'paid', currencyCode: 'SAR', exchangeRateScaled: 1000000000, paymentMethod: 'cash' },
+      ])
+      return originalInvoke?.(command, args)
+    })
+    render(<App />)
+    await user.click(screen.getByRole('button', { name: 'التقارير' }))
+
+    expect(await screen.findByText('INV-1001')).toBeInTheDocument()
+    expect(screen.getByText('INV-1002')).toBeInTheDocument()
+    expect(screen.queryByText('INV-1003')).not.toBeInTheDocument()
+    expect(screen.queryByText('INV-1004')).not.toBeInTheDocument()
+
+    await user.type(screen.getByRole('textbox', { name: 'ابحث برقم الفاتورة أو اسم العميل...' }), 'سارة')
+    expect(screen.getByText('INV-1002')).toBeInTheDocument()
+    expect(screen.queryByText('INV-1001')).not.toBeInTheDocument()
+
+    await user.clear(screen.getByRole('textbox', { name: 'ابحث برقم الفاتورة أو اسم العميل...' }))
+    await user.selectOptions(screen.getByRole('combobox', { name: 'الفترة الزمنية' }), 'all')
+    expect(screen.getByText('INV-1004')).toBeInTheDocument()
+  })
+
   it('opens every application page without a placeholder screen', async () => {
     const user = userEvent.setup()
     render(<App />)
