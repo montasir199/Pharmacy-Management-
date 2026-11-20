@@ -237,6 +237,7 @@ function App() {
   const [pharmacyLogo, setPharmacyLogo] = useState('')
   const [productSalePrice, setProductSalePrice] = useState('')
   const [productPrices, setProductPrices] = useState<Record<number, string>>({})
+  const [productReorderLevels, setProductReorderLevels] = useState<Record<number, string>>({})
   const [batchNumber, setBatchNumber] = useState('')
   const [batchExpiry, setBatchExpiry] = useState('')
   const [batchUnits, setBatchUnits] = useState('')
@@ -1078,6 +1079,21 @@ function App() {
     }
   }
 
+  async function saveProductReorderLevel(productId: number) {
+    const value = Number(productReorderLevels[productId])
+    if (!Number.isSafeInteger(value) || value < 0) {
+      setInventoryError(t('invalidReorderLevel'))
+      return
+    }
+    setInventoryError('')
+    try {
+      await invoke('update_product_reorder_level', { productId, reorderLevelUnits: value })
+      await refreshProducts()
+    } catch (error) {
+      setInventoryError(error instanceof Error ? error.message : String(error))
+    }
+  }
+
   function handleLogoUpload(file?: File) {
     if (!file) return
     if (!['image/png', 'image/jpeg', 'image/webp'].includes(file.type)) {
@@ -1117,6 +1133,9 @@ function App() {
       setProducts(result)
       setProductPrices(Object.fromEntries(
         result.map((product) => [product.id, (product.salePriceMinor / 100).toFixed(2)]),
+      ))
+      setProductReorderLevels(Object.fromEntries(
+        result.map((product) => [product.id, String(product.reorderLevelUnits)]),
       ))
     } catch (error) {
       setInventoryError(error instanceof Error ? error.message : String(error))
@@ -1520,10 +1539,23 @@ function App() {
                           <td>{product.sku}</td>
                           <td>{product.baseUnit}</td>
                           <td><span className={product.availableUnits <= product.reorderLevelUnits ? 'stock-low' : 'stock-ok'}>{product.availableUnits}</span></td>
+                          <td>
+                            <div className="product-reorder-editor">
+                              <input
+                                aria-label={`${t('reorderLevel')} ${isArabic ? product.nameAr : product.nameEn}`}
+                                type="number"
+                                min="0"
+                                step="1"
+                                value={productReorderLevels[product.id] ?? String(product.reorderLevelUnits)}
+                                onChange={(event) => setProductReorderLevels((current) => ({ ...current, [product.id]: event.target.value }))}
+                              />
+                              <button className="text-button" type="button" onClick={() => void saveProductReorderLevel(product.id)}>{t('save')}</button>
+                            </div>
+                          </td>
                           <td>{product.reorderLevelUnits}</td>
                         </tr>
                       ))}
-                    {products.length === 0 && <tr><td colSpan={5} className="inventory-empty">{t('noProducts')}</td></tr>}
+                    {products.length === 0 && <tr><td colSpan={6} className="inventory-empty">{t('noProducts')}</td></tr>}
                   </tbody>
                 </table>
               </div>
@@ -1664,6 +1696,7 @@ function App() {
                         <th>{t('baseUnit')}</th>
                         <th>{t('unitPrice')}</th>
                         <th>{t('availableUnits')}</th>
+                        <th>{t('reorderLevel')}</th>
                       </tr>
                     </thead>
                     <tbody>
