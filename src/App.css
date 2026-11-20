@@ -2794,3 +2794,10 @@ button:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-vis
 .dashboard-stock-alert-icon.is-low { color: #955b4f; background: #f7eeeb; }
 .dashboard-stock-alert-icon.is-expiring { color: #8a6426; background: #fbf2df; }
 @media (max-width: 600px) { .dashboard-stock-alerts { padding: 14px; } .dashboard-stock-alert-grid { grid-template-columns: 1fr; } }
+
+
+/* Supplier purchasing overview */
+.supplier-overview { margin-bottom: 18px; padding: 18px 20px; }
+.supplier-overview .panel-heading { margin-bottom: 12px; }
+.supplier-overview .table-scroll { width: 100%; }
+.supplier-overview table { min-width: 560px; }

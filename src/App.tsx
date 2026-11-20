@@ -1202,6 +1202,22 @@ function App() {
     return !query || [purchase.referenceNumber, purchase.supplierName, purchase.status].some((value) => value.toLocaleLowerCase().includes(query))
   })
   const receivedPurchaseCount = purchases.filter((purchase) => purchase.status === 'received').length
+  const supplierDirectory = Array.from(purchases.reduce((directory, purchase) => {
+    const normalizedName = purchase.supplierName.trim().toLocaleLowerCase()
+    if (!normalizedName) return directory
+    const current = directory.get(normalizedName) ?? {
+      name: purchase.supplierName.trim(),
+      purchaseCount: 0,
+      totalMinor: 0,
+      lastPurchaseAt: purchase.purchasedAt,
+    }
+    current.purchaseCount += 1
+    current.totalMinor += purchase.totalMinor
+    if (purchase.purchasedAt > current.lastPurchaseAt) current.lastPurchaseAt = purchase.purchasedAt
+    directory.set(normalizedName, current)
+    return directory
+  }, new Map<string, { name: string; purchaseCount: number; totalMinor: number; lastPurchaseAt: string }>()).values())
+    .sort((left, right) => right.totalMinor - left.totalMinor || left.name.localeCompare(right.name))
   const reportStartDate = new Date()
   reportStartDate.setHours(0, 0, 0, 0)
   if (reportPeriod === '7d') reportStartDate.setDate(reportStartDate.getDate() - 6)
@@ -1935,6 +1951,28 @@ function App() {
               <article className="stat-card"><p>{t('purchaseValue')}</p><strong className="stat-value">{formatMoney(purchases.reduce((sum, purchase) => sum + purchase.totalMinor, 0))}</strong></article>
               <article className="stat-card"><p>{t('receivedPurchases')}</p><strong className="stat-value">{receivedPurchaseCount}</strong></article>
             </div>
+            <section className="panel supplier-overview">
+              <div className="panel-heading">
+                <div><h3>{t('supplierDirectory')}</h3><p>{t('supplierDirectoryDescription')}</p></div>
+                <span className="inventory-count">{supplierDirectory.length}</span>
+              </div>
+              <div className="table-scroll">
+                <table>
+                  <thead><tr><th>{t('supplierName')}</th><th>{t('supplierPurchaseCount')}</th><th>{t('supplierTotalSpend')}</th><th>{t('lastPurchaseDate')}</th></tr></thead>
+                  <tbody>
+                    {supplierDirectory.slice(0, 8).map((supplier) => (
+                      <tr key={supplier.name.toLocaleLowerCase()}>
+                        <td><strong>{supplier.name}</strong></td>
+                        <td>{supplier.purchaseCount}</td>
+                        <td className="amount-cell">{formatMoney(supplier.totalMinor)}</td>
+                        <td>{new Date(supplier.lastPurchaseAt).toLocaleDateString(isArabic ? 'ar' : 'en')}</td>
+                      </tr>
+                    ))}
+                    {supplierDirectory.length === 0 && <tr><td colSpan={4} className="inventory-empty">{t('noSupplierHistory')}</td></tr>}
+                  </tbody>
+                </table>
+              </div>
+            </section>
             <div className="inventory-grid">
               <form className="panel inventory-form" onSubmit={createPurchase}>
                 <label><span>{t('purchaseReference')}</span><input value={purchaseReference} onChange={(e) => setPurchaseReference(e.target.value)} required /></label>

@@ -485,6 +485,25 @@ describe('main application shell', () => {
     expect(screen.queryByText('PO-1002')).not.toBeInTheDocument()
   })
 
+  it('summarizes supplier activity from existing purchase records', async () => {
+    const user = userEvent.setup()
+    const originalInvoke = invokeMock.getMockImplementation()
+    invokeMock.mockImplementation((command: string, args: Record<string, unknown>) => {
+      if (command === 'list_purchases') return Promise.resolve([
+        { id: 1, referenceNumber: 'PO-2001', supplierName: 'مؤسسة الدواء', totalMinor: 12500, status: 'received', purchasedAt: '2026-11-18T10:00:00Z' },
+        { id: 2, referenceNumber: 'PO-2002', supplierName: 'مؤسسة الدواء', totalMinor: 7500, status: 'received', purchasedAt: '2026-11-19T10:00:00Z' },
+        { id: 3, referenceNumber: 'PO-2003', supplierName: 'شركة الشفاء', totalMinor: 25000, status: 'received', purchasedAt: '2026-11-17T10:00:00Z' },
+      ])
+      return originalInvoke?.(command, args)
+    })
+    render(<App />)
+    await user.click(screen.getByRole('button', { name: 'المشتريات' }))
+    expect(await screen.findByRole('heading', { name: 'ملخص الموردين' })).toBeInTheDocument()
+    expect(screen.getByText('مؤسسة الدواء')).toBeInTheDocument()
+    expect(screen.getByText('شركة الشفاء')).toBeInTheDocument()
+    expect(screen.getByText('2', { selector: 'td' })).toBeInTheDocument()
+  })
+
   it('filters sales reports by period and customer without mixing currencies', async () => {
     const user = userEvent.setup()
     const now = Date.now()
