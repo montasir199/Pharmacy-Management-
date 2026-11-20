@@ -491,7 +491,7 @@ function App() {
   }, [activePage, selectedSaleProductId])
 
   useEffect(() => {
-    if (activePage === 'dashboard') void refreshDashboard()
+    if (activePage === 'dashboard') { void refreshDashboard(); void refreshProducts() }
     if (activePage === 'customers') void refreshCustomers()
     if (activePage === 'purchases') void refreshPurchases()
     if (activePage === 'settings') void refreshSetting()
@@ -1437,6 +1437,30 @@ function App() {
                 <span className="stat-note">{t('lowStockNote')}</span>
               </article>
             </div>
+
+            {(lowStockProducts.length > 0 || expiringProducts.length > 0) && (
+              <section className="panel dashboard-stock-alerts" aria-live="polite">
+                <div className="panel-heading">
+                  <div>
+                    <h3>{t('inventoryAttention')}</h3>
+                    <p>{t('inventoryAttentionDescription')}</p>
+                  </div>
+                  <span className="inventory-count">{lowStockProducts.length + expiringProducts.length}</span>
+                </div>
+                <div className="dashboard-stock-alert-grid">
+                  <button type="button" className="dashboard-stock-alert" onClick={() => { setProductCatalogFilter('low'); setActivePage('products') }}>
+                    <span className="dashboard-stock-alert-icon is-low"><Bell size={17} /></span>
+                    <span><strong>{t('catalogLowStock')}</strong><small>{t('dashboardLowStockCount', { count: lowStockProducts.length })}</small></span>
+                    <ChevronDown size={16} />
+                  </button>
+                  <button type="button" className="dashboard-stock-alert" onClick={() => { setProductCatalogFilter('expiring'); setActivePage('products') }}>
+                    <span className="dashboard-stock-alert-icon is-expiring"><Activity size={17} /></span>
+                    <span><strong>{t('catalogExpiring')}</strong><small>{t('dashboardExpiringCount', { count: expiringProducts.length })}</small></span>
+                    <ChevronDown size={16} />
+                  </button>
+                </div>
+              </section>
+            )}
 
             <div className="dashboard-grid">
               <section className="panel sales-panel">
