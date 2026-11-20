@@ -249,6 +249,7 @@ function App() {
   const [currencies, setCurrencies] = useState<CurrencySummary[]>([])
   const [saleCurrencyCode, setSaleCurrencyCode] = useState('SAR')
   const [exchangeRate, setExchangeRate] = useState('1')
+  const [defaultCurrencyExchangeRate, setDefaultCurrencyExchangeRate] = useState('1')
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>('cash')
   const [paymentAmounts, setPaymentAmounts] = useState<Record<'cash' | 'card' | 'bank_transfer', string>>({
     cash: '',
@@ -299,10 +300,16 @@ function App() {
   const [updateStatus, setUpdateStatus] = useState<'idle' | 'checking' | 'downloading' | 'error'>('idle')
   const [updateError, setUpdateError] = useState('')
   const isArabic = i18n.resolvedLanguage !== 'en'
-  const formatMoney = (minor: number, currencyCode = 'SAR') => new Intl.NumberFormat(
+  const formatCurrencyMinor = (minor: number, currencyCode: string) => new Intl.NumberFormat(
     isArabic ? 'ar-SA' : 'en-US',
     { style: 'currency', currency: currencyCode },
   ).format(minor / (10 ** (currencies.find((currency) => currency.code === currencyCode)?.minorUnitExponent ?? 2)))
+  const formatMoney = (baseMinor: number) => {
+    const rate = saleCurrencyCode === 'SAR' ? 1 : Number(defaultCurrencyExchangeRate)
+    if (!Number.isFinite(rate) || rate <= 0) return '—'
+    const exponent = currencies.find((currency) => currency.code === saleCurrencyCode)?.minorUnitExponent ?? 2
+    return formatCurrencyMinor(Math.round((baseMinor / 100 / rate) * (10 ** exponent)), saleCurrencyCode)
+  }
   const convertInvoiceMinor = (baseMinor: number, currencyCode: string, rateScaled?: number) => {
     const exponent = currencies.find((currency) => currency.code === currencyCode)?.minorUnitExponent ?? 2
     const rate = rateScaled === undefined
@@ -313,12 +320,12 @@ function App() {
   }
   const formatInvoiceMoney = (baseMinor: number, currencyCode = saleCurrencyCode, rateScaled?: number) => {
     if (rateScaled === undefined && currencyCode !== 'SAR' && !isExchangeRateValid) return '—'
-    return formatMoney(convertInvoiceMinor(baseMinor, currencyCode, rateScaled), currencyCode)
+    return formatCurrencyMinor(convertInvoiceMinor(baseMinor, currencyCode, rateScaled), currencyCode)
   }
   const formatCompactAmount = (minor: number) => new Intl.NumberFormat(
     isArabic ? 'ar' : 'en',
     { notation: 'compact', maximumFractionDigits: 1 },
-  ).format(minor / 100)
+  ).format((minor / 100) / (saleCurrencyCode === 'SAR' ? 1 : Number(defaultCurrencyExchangeRate) || 1))
   const expiringProducts = products
     .filter((product) => {
       if (!product.nearestExpiryDate || product.availableUnits <= 0) return false
@@ -431,7 +438,7 @@ function App() {
   }, [activePage])
 
   useEffect(() => {
-    if (activePage !== 'sales') return
+    if (activePage !== 'sales' && activePage !== 'settings') return
     let active = true
     void invoke<CurrencySummary[]>('list_currencies')
       .then((result) => {
@@ -798,7 +805,7 @@ function App() {
 
   async function refreshSetting() {
     try {
-      const keys = ['pharmacy_name', 'pharmacy_address', 'pharmacy_phone', 'pharmacy_tax_number', 'pharmacy_logo', 'tax_rate_basis_points']
+      const keys = ['pharmacy_name', 'pharmacy_address', 'pharmacy_phone', 'pharmacy_tax_number', 'pharmacy_logo', 'tax_rate_basis_points', 'default_currency_code', 'default_currency_exchange_rate']
       const values = await Promise.all(keys.map((key) => invoke<string>('get_setting', { key })))
       setPharmacyName(values[0])
       setPharmacyAddress(values[1])
@@ -806,6 +813,11 @@ function App() {
       setPharmacyTaxNumber(values[3])
       setPharmacyLogo(values[4])
       setPharmacyTaxRate(values[5] ? (Number(values[5]) / 100).toString() : '0')
+      const savedCurrency = values[6] || 'SAR'
+      const savedRate = savedCurrency === 'SAR' ? '1' : values[7] || ''
+      setSaleCurrencyCode(savedCurrency)
+      setDefaultCurrencyExchangeRate(savedRate)
+      setExchangeRate(savedRate)
     } catch (error) {
       setInventoryError(error instanceof Error ? error.message : String(error))
     }
@@ -847,6 +859,12 @@ function App() {
       setInventoryError(t('taxRate'))
       return
     }
+    const currencyRate = saleCurrencyCode === 'SAR' ? 1 : Number(defaultCurrencyExchangeRate)
+    if (!currencies.some((currency) => currency.code === saleCurrencyCode)
+      || !Number.isFinite(currencyRate) || currencyRate <= 0) {
+      setInventoryError(t('currencyExchangeRateRequired'))
+      return
+    }
     try {
       await invoke('set_settings', {
         settings: {
@@ -856,6 +874,8 @@ function App() {
           pharmacy_tax_number: pharmacyTaxNumber,
           pharmacy_logo: pharmacyLogo,
           tax_rate_basis_points: String(Math.round(taxRate * 100)),
+          default_currency_code: saleCurrencyCode,
+          default_currency_exchange_rate: String(currencyRate),
         },
       })
     } catch (error) {
@@ -939,8 +959,7 @@ function App() {
     setSaleCart([])
     setPaymentAmounts({ cash: '', card: '', bank_transfer: '' })
     setPaymentMethod('cash')
-    setSaleCurrencyCode('SAR')
-    setExchangeRate('1')
+    setExchangeRate(defaultCurrencyExchangeRate || '1')
     setSaleCustomerId('')
     setQuickCustomerOpen(false)
     setSaleSearch('')
@@ -1033,8 +1052,7 @@ function App() {
     setSaleCustomerId('')
     setPaymentAmounts({ cash: '', card: '', bank_transfer: '' })
     setPaymentMethod('cash')
-    setSaleCurrencyCode('SAR')
-    setExchangeRate('1')
+    setExchangeRate(defaultCurrencyExchangeRate || '1')
     setSaleReceipt(null)
     setQuickCustomerOpen(false)
     setSaleSearch('')
@@ -1833,6 +1851,46 @@ function App() {
                 <span>{t('taxRate')}</span>
                 <input type="number" min="0" max="100" step="0.01" value={pharmacyTaxRate} onChange={(event) => setPharmacyTaxRate(event.target.value)} />
               </label>
+              <div className="global-currency-settings">
+                <label>
+                  <span>{t('defaultCurrency')}</span>
+                  <select
+                    value={saleCurrencyCode}
+                    onChange={(event) => {
+                      const code = event.target.value
+                      setSaleCurrencyCode(code)
+                      if (code === 'SAR') {
+                        setDefaultCurrencyExchangeRate('1')
+                        setExchangeRate('1')
+                      } else if (saleCurrencyCode === 'SAR') {
+                        setDefaultCurrencyExchangeRate('')
+                        setExchangeRate('')
+                      }
+                    }}
+                  >
+                    {currencies.map((currency) => (
+                      <option key={currency.code} value={currency.code}>
+                        {currency.code} · {new Intl.DisplayNames([isArabic ? 'ar' : 'en'], { type: 'currency' }).of(currency.code) ?? currency.name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label>
+                  <span>{t('defaultExchangeRate')}</span>
+                  <input
+                    type="number"
+                    min={saleCurrencyCode === 'SAR' ? '1' : '0.000000001'}
+                    step="any"
+                    value={defaultCurrencyExchangeRate}
+                    onChange={(event) => {
+                      setDefaultCurrencyExchangeRate(event.target.value)
+                      setExchangeRate(event.target.value)
+                    }}
+                    disabled={saleCurrencyCode === 'SAR'}
+                  />
+                  <small>{t('exchangeRateHelp')}</small>
+                </label>
+              </div>
               <label className="logo-upload">
                 <span>{t('pharmacyLogo')}</span>
                 <input type="file" accept="image/png,image/jpeg,image/webp" onChange={(event) => handleLogoUpload(event.target.files?.[0])} />
@@ -2204,25 +2262,16 @@ function App() {
                       <div><span>{t('subtotal')}</span><strong>{formatInvoiceMoney(invoiceAmounts.subtotal)}</strong></div>
                       <div><span>{t('discounts')}</span><strong>{formatInvoiceMoney(invoiceAmounts.discount)}</strong></div>
                       <div><span>{t('vat')} ({(taxRateBasisPoints / 100).toFixed(2)}%)</span><strong>{formatInvoiceMoney(invoiceTaxMinor)}</strong></div>
-                      <div className="invoice-grand-total"><span>{t('netTotal')}</span><strong>{formatMoney(invoiceTotalMinor, saleCurrencyCode)}</strong></div>
+                      <div className="invoice-grand-total"><span>{t('netTotal')}</span><strong>{formatCurrencyMinor(invoiceTotalMinor, saleCurrencyCode)}</strong></div>
                     </div>
                     <section className="payment-section" ref={paymentSectionRef} tabIndex={-1}>
                       <div className="payment-heading"><h4>{t('paymentMethods')}</h4><kbd>F4</kbd></div>
                       <div className="currency-settings">
-                        <label>
+                        <div className="active-currency-display">
                           <span>{t('currency')}</span>
-                          <select value={saleCurrencyCode} onChange={(event) => {
-                            const code = event.target.value
-                            setSaleCurrencyCode(code)
-                            setExchangeRate(code === 'SAR' ? '1' : '')
-                          }}>
-                            {currencies.map((currency) => (
-                              <option key={currency.code} value={currency.code}>
-                                {currency.code} · {new Intl.DisplayNames([isArabic ? 'ar' : 'en'], { type: 'currency' }).of(currency.code) ?? currency.name}
-                              </option>
-                            ))}
-                          </select>
-                        </label>
+                          <strong>{saleCurrencyCode} · {new Intl.DisplayNames([isArabic ? 'ar' : 'en'], { type: 'currency' }).of(saleCurrencyCode) ?? saleCurrencyCode}</strong>
+                          <small>{t('currencyManagedInSettings')}</small>
+                        </div>
                         <label>
                           <span>{t('exchangeRate')}</span>
                           <input
@@ -2278,8 +2327,8 @@ function App() {
                         </label>
                       )}
                       <div className="payment-balance">
-                        <div><span>{t('remainingAmount')}</span><strong>{formatMoney(remainingMinor, saleCurrencyCode)}</strong></div>
-                        <div><span>{t('changeDue')}</span><strong>{formatMoney(changeMinor, saleCurrencyCode)}</strong></div>
+                        <div><span>{t('remainingAmount')}</span><strong>{formatCurrencyMinor(remainingMinor, saleCurrencyCode)}</strong></div>
+                        <div><span>{t('changeDue')}</span><strong>{formatCurrencyMinor(changeMinor, saleCurrencyCode)}</strong></div>
                       </div>
                     </section>
                     <button className="primary-button complete-sale-button" type="submit" disabled={saleSubmitting || !saleCart.length || saleCart.some((line) => line.quantity < 1) || !isExchangeRateValid || paymentTotalMinor < invoiceTotalMinor}>
@@ -2340,8 +2389,8 @@ function App() {
                         <p>{t('discounts')}: {formatInvoiceMoney(saleReceipt.discountMinor, saleReceipt.currencyCode, saleReceipt.exchangeRateScaled)}</p>
                         <p>{t('vat')} ({(saleReceipt.taxRateBasisPoints / 100).toFixed(2)}%): {formatInvoiceMoney(saleReceipt.taxMinor, saleReceipt.currencyCode, saleReceipt.exchangeRateScaled)}</p>
                         <h3>{t('total')}: {formatInvoiceMoney(saleReceipt.totalMinor, saleReceipt.currencyCode, saleReceipt.exchangeRateScaled)}</h3>
-                        <p>{t('paidAmount')}: {formatMoney(receiptPaidMinor, saleReceipt.currencyCode)}</p>
-                        {receiptChangeMinor > 0 && <p>{t('changeDue')}: {formatMoney(receiptChangeMinor, saleReceipt.currencyCode)}</p>}
+                        <p>{t('paidAmount')}: {formatCurrencyMinor(receiptPaidMinor, saleReceipt.currencyCode)}</p>
+                        {receiptChangeMinor > 0 && <p>{t('changeDue')}: {formatCurrencyMinor(receiptChangeMinor, saleReceipt.currencyCode)}</p>}
                       </div>
                       <div className="receipt-code-row">
                         <div className="receipt-code-preview"><Barcode value={saleReceipt.invoiceNumber} height={36} width={1} fontSize={9} displayValue /></div>
