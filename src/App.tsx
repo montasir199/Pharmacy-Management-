@@ -2358,55 +2358,47 @@ function App() {
                       </button>
                       <span className="pos-result-count">{t('posShowingProducts', { count: saleCatalogProducts.length })}</span>
                     </div>
-                    <div className="pos-product-table table-scroll">
-                      <table>
-                        <thead>
-                          <tr>
-                            <th>{t('product')}</th>
-                            <th>{t('barcode')}</th>
-                            <th>{t('unitPrice')}</th>
-                            <th>{t('availableUnits')}</th>
-                            <th>{t('nearestExpiry')}</th>
-                            <th>{t('addToInvoice')}</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {saleCatalogProducts.map((product) => (
-                            <tr key={product.id}>
-                              <td>
-                                <strong>{isArabic ? product.nameAr : product.nameEn}</strong>
-                                <small>{product.sku}</small>
-                              </td>
-                              <td>{product.barcode || '—'}</td>
-                              <td>{formatInvoiceMoney(product.salePriceMinor)}</td>
-                              <td>
-                                <span className={product.availableUnits <= product.reorderLevelUnits ? 'stock-low' : 'stock-ok'}>
-                                  {product.availableUnits}
-                                </span>
-                                {product.availableUnits <= product.reorderLevelUnits && <small className="stock-warning">{t('stockLow')}</small>}
-                              </td>
-                              <td>{product.nearestExpiryDate || '—'}</td>
-                              <td>
-                                <button
-                                  className="icon-button pos-add-button"
-                                  type="button"
-                                  aria-label={`${t('addToInvoice')} ${isArabic ? product.nameAr : product.nameEn}`}
-                                  onClick={() => addToSaleCart(product.id)}
-                                  disabled={product.availableUnits === 0 || product.salePriceMinor <= 0}
-                                >
-                                  <Plus size={17} />
-                                </button>
-                              </td>
-                            </tr>
-                          ))}
-                          {products.length === 0 && !inventoryLoading && (
-                            <tr><td colSpan={6} className="inventory-empty">{t('noProducts')}</td></tr>
-                          )}
-                          {products.length > 0 && saleCatalogProducts.length === 0 && (
-                            <tr><td colSpan={6} className="inventory-empty">{t('noSearchResults')}</td></tr>
-                          )}
-                        </tbody>
-                      </table>
+                    <div className="pos-product-grid" role="list" aria-label={t('posProducts')}>
+                      {saleCatalogProducts.map((product) => {
+                        const productName = isArabic ? product.nameAr : product.nameEn
+                        const isLowStock = product.availableUnits <= product.reorderLevelUnits
+                        const isOutOfStock = product.availableUnits === 0
+                        return (
+                          <article className="pos-product-card" key={product.id} role="listitem">
+                            <div className="pos-product-card-top">
+                              <div className="pos-product-identity">
+                                <h4>{productName}</h4>
+                                <span>{product.sku}</span>
+                              </div>
+                              <span className={isOutOfStock ? 'pos-stock-state is-out' : isLowStock ? 'pos-stock-state is-low' : 'pos-stock-state is-available'}>
+                                {isOutOfStock ? t('posFilterOutOfStock') : isLowStock ? t('stockLow') : t('posFilterAvailable')}
+                              </span>
+                            </div>
+                            <div className="pos-product-card-price">{formatInvoiceMoney(product.salePriceMinor)}</div>
+                            <div className="pos-product-card-details">
+                              <div><span>{t('barcode')}</span><strong>{product.barcode || '—'}</strong></div>
+                              <div><span>{t('availableUnits')}</span><strong className={isLowStock ? 'stock-low' : 'stock-ok'}>{product.availableUnits}</strong></div>
+                              <div><span>{t('nearestExpiry')}</span><strong>{product.nearestExpiryDate || '—'}</strong></div>
+                            </div>
+                            <button
+                              className="pos-product-add"
+                              type="button"
+                              aria-label={`${t('addToInvoice')} ${productName}`}
+                              onClick={() => addToSaleCart(product.id)}
+                              disabled={isOutOfStock || product.salePriceMinor <= 0}
+                            >
+                              <Plus size={16} />
+                              <span>{t('addToInvoice')}</span>
+                            </button>
+                          </article>
+                        )
+                      })}
+                      {products.length === 0 && !inventoryLoading && (
+                        <div className="pos-catalog-empty">{t('noProducts')}</div>
+                      )}
+                      {products.length > 0 && saleCatalogProducts.length === 0 && (
+                        <div className="pos-catalog-empty">{t('noSearchResults')}</div>
+                      )}
                     </div>
                   </section>
                   <form ref={saleFormRef} className="panel pos-cart" onSubmit={createSale}>
