@@ -1664,6 +1664,30 @@ tbody tr:last-child td {
   max-height: 300px;
 }
 
+.catalog-actions {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.catalog-refresh-button {
+  width: 30px;
+  height: 30px;
+}
+
+.catalog-refresh-button:disabled {
+  cursor: wait;
+  opacity: .65;
+}
+
+.is-spinning {
+  animation: pos-refresh-spin 900ms linear infinite;
+}
+
+@keyframes pos-refresh-spin {
+  to { transform: rotate(360deg); }
+}
+
 .invoice-items-table {
   width: 100%;
   min-width: 610px;
@@ -1683,6 +1707,31 @@ tbody tr:last-child td {
   background: var(--surface);
   border: 1px solid var(--line);
   border-radius: 7px;
+}
+
+.quantity-input {
+  display: block;
+  margin-inline: auto;
+}
+
+.quantity-stepper {
+  display: flex;
+  justify-content: center;
+  gap: 4px;
+  margin-top: 4px;
+}
+
+.quantity-stepper .icon-button {
+  width: 24px;
+  height: 24px;
+  color: var(--green-deep);
+  background: var(--surface-muted);
+  border-color: var(--line);
+}
+
+.quantity-stepper .icon-button:disabled {
+  cursor: not-allowed;
+  opacity: .4;
 }
 
 .discount-input {
