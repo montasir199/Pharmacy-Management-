@@ -465,14 +465,18 @@ describe('main application shell', () => {
     expect(screen.getByLabelText('الكمية بوحدة المنتج باراسيتامول')).toHaveValue(1)
   })
 
-  it('renders the redesigned point-of-sale workspace overview and live invoice metrics', async () => {
+  it('renders the full point-of-sale checkout workspace without the dashboard overview', async () => {
+    const user = userEvent.setup()
     render(<App />)
-    await userEvent.setup().click(screen.getByRole('button', { name: 'المبيعات' }))
-    expect(await screen.findByRole('region', { name: 'ملخص نقطة البيع' })).toBeInTheDocument()
-    expect(screen.getByText('مساحة البيع')).toBeInTheDocument()
-    expect(screen.getByText('منتجات الكتالوج')).toBeInTheDocument()
-    expect(screen.getByText('أصناف الفاتورة')).toBeInTheDocument()
-    expect(screen.getByText('إجمالي الفاتورة')).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'المبيعات' }))
+
+    // The reference POS intentionally hides the dashboard-style overview.
+    expect(screen.queryByRole('region', { name: 'ملخص نقطة البيع' })).not.toBeInTheDocument()
+    expect(await screen.findByRole('textbox', { name: 'ابحث عن منتج أو رمز...' })).toBeInTheDocument()
+    expect(screen.getByRole('textbox', { name: 'امسح الباركود أو اكتبه' })).toBeInTheDocument()
+    expect(screen.getByRole('tab', { name: /فاتورة 1/ })).toBeInTheDocument()
+    expect(await screen.findByRole('button', { name: /إضافة للفاتورة باراسيتامول/ })).toBeInTheDocument()
+    expect(document.querySelector('.pos-layout')).toBeInTheDocument()
   })
 
   it('creates a point-of-sale invoice with a generated number and enables printing', async () => {
