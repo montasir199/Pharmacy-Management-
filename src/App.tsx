@@ -2690,12 +2690,6 @@ function App() {
                     <div className="pos-overview-metric pos-overview-total"><span>{t('posCurrentTotal')}</span><strong>{formatInvoiceMoney(invoiceTotalMinor)}</strong></div>
                   </div>
                 </section>
-                <InvoiceTabs
-                  drafts={saleDrafts}
-                  activeDraftId={activeDraftId}
-                  onSelect={selectSaleDraft}
-                  onCreate={() => void startNewSaleDraft()}
-                />
                 <div className="pos-layout">
                   <section className="panel pos-catalog">
                     <div className="panel-heading">
@@ -2744,7 +2738,15 @@ function App() {
                     />
                   </section>
                   <InvoicePanel
-                    invoiceNumber={activeSaleDraft?.id ?? null}
+                    tabs={(
+                      <InvoiceTabs
+                        drafts={saleDrafts}
+                        activeDraftId={activeDraftId}
+                        onSelect={selectSaleDraft}
+                        onCreate={() => void startNewSaleDraft()}
+                      />
+                    )}
+                    invoiceNumber={activeSaleDraft?.id ?? null
                     startedAt={saleStartedAt ? saleStartedAt.slice(0, 16).replace('T', ' ') : ''}
                     customers={customers}
                     customerRef={saleCustomerRef}
