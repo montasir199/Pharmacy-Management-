@@ -23,6 +23,7 @@ type Props = {
   canHold: boolean
   paymentDisabled: boolean
   customerExtra?: ReactNode
+  tabs?: ReactNode
   children: ReactNode
   onCustomerChange: (customerId: string) => void
   onCreateCustomer: () => void
@@ -50,6 +51,7 @@ export function InvoicePanel({
   canHold,
   paymentDisabled,
   customerExtra,
+  tabs,
   children,
   onCustomerChange,
   onCreateCustomer,
@@ -64,6 +66,7 @@ export function InvoicePanel({
 
   return (
     <section className="panel pos-cart">
+      {tabs}
       <div className="panel-heading pos-invoice-heading">
         <div><h3>{t('currentSale')}</h3><p>{t('invoiceNumberPending')}</p></div>
         <div className="pos-invoice-actions">
