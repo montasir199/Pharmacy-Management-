@@ -1284,11 +1284,7 @@ mod tests {
         assert_eq!(dashboard.today_orders, 1);
         assert_eq!(dashboard.stock_units, 1);
         let local_today: String = connection
-            .query_row(
-                "SELECT date('now', 'localtime')",
-                [],
-                |row| row.get(0),
-            )
+            .query_row("SELECT date('now', 'localtime')", [], |row| row.get(0))
             .expect("read local calendar date");
         let today_bucket = dashboard
             .daily_sales
