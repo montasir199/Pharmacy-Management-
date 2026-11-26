@@ -1283,6 +1283,19 @@ mod tests {
         assert_eq!(dashboard.today_sales_minor, 500);
         assert_eq!(dashboard.today_orders, 1);
         assert_eq!(dashboard.stock_units, 1);
+        let local_today: String = connection
+            .query_row(
+                "SELECT date('now', 'localtime')",
+                [],
+                |row| row.get(0),
+            )
+            .expect("read local calendar date");
+        let today_bucket = dashboard
+            .daily_sales
+            .iter()
+            .find(|entry| entry.date == local_today)
+            .expect("dashboard includes the local calendar day");
+        assert_eq!(today_bucket.total_minor, 500);
     }
 
     #[test]
