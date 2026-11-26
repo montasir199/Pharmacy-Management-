@@ -3695,11 +3695,25 @@ button:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-vis
 }
 .app-shell[dir="rtl"] .inventory-page:has(.pos-layout) .pos-cart { grid-column: 1; }
 .app-shell[dir="rtl"] .inventory-page:has(.pos-layout) .pos-catalog { grid-column: 2; }
+/* RTL: grid column 1 is the right side, so reserve a useful but compact
+   invoice column and give the medicine catalog the remaining width. */
+.app-shell[dir="rtl"] .inventory-page:has(.pos-layout) .pos-layout {
+  grid-template-columns: minmax(320px, 38%) minmax(0, 1fr);
+}
 .app-shell[dir="ltr"] .inventory-page:has(.pos-layout) .pos-cart { grid-column: 2; }
 .app-shell[dir="ltr"] .inventory-page:has(.pos-layout) .pos-catalog { grid-column: 1; }
+.app-shell[dir="ltr"] .inventory-page:has(.pos-layout) .pos-layout {
+  grid-template-columns: minmax(0, 1fr) minmax(320px, 38%);
+}
 @media (max-width: 1050px) {
   .inventory-page:has(.pos-layout) .pos-layout {
     grid-template-columns: minmax(0, 1fr) minmax(300px, 36%);
+  }
+  .app-shell[dir="rtl"] .inventory-page:has(.pos-layout) .pos-layout {
+    grid-template-columns: minmax(300px, 42%) minmax(0, 1fr);
+  }
+  .app-shell[dir="ltr"] .inventory-page:has(.pos-layout) .pos-layout {
+    grid-template-columns: minmax(0, 1fr) minmax(300px, 42%);
   }
   .inventory-page:has(.pos-layout) .pos-product-grid {
     grid-template-columns: repeat(auto-fill, minmax(145px, 1fr));
