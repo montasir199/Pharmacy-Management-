@@ -109,16 +109,18 @@ pub struct DashboardSummary {
 }
 
 pub fn dashboard(connection: &Connection) -> Result<DashboardSummary, rusqlite::Error> {
+    // Dashboard "today" follows the workstation's local calendar day. Sale
+    // timestamps are stored in UTC, so convert them before comparing dates.
     let today_sales_minor = connection.query_row(
         "SELECT COALESCE(SUM(total_minor), 0) FROM sales
-         WHERE sold_at >= strftime('%Y-%m-%dT00:00:00.000Z', 'now')
+         WHERE date(sold_at, 'localtime') = date('now', 'localtime')
            AND status = 'paid'",
         [],
         |row| row.get(0),
     )?;
     let today_orders = connection.query_row(
         "SELECT COUNT(*) FROM sales
-         WHERE sold_at >= strftime('%Y-%m-%dT00:00:00.000Z', 'now')
+         WHERE date(sold_at, 'localtime') = date('now', 'localtime')
            AND status != 'cancelled'",
         [],
         |row| row.get(0),
@@ -182,13 +184,13 @@ pub fn dashboard(connection: &Connection) -> Result<DashboardSummary, rusqlite::
     let daily_sales = (0_i64..7)
         .map(|offset| {
             let date: String = connection.query_row(
-                "SELECT strftime('%Y-%m-%d', 'now', ?1)",
+                "SELECT strftime('%Y-%m-%d', 'now', 'localtime', ?1)",
                 [format!("-{offset} days")],
                 |row| row.get(0),
             )?;
             let total_minor = connection.query_row(
                 "SELECT COALESCE(SUM(total_minor), 0) FROM sales
-                 WHERE substr(sold_at, 1, 10) = ?1 AND status = 'paid'",
+                 WHERE date(sold_at, 'localtime') = ?1 AND status = 'paid'",
                 [&date],
                 |row| row.get(0),
             )?;
@@ -1281,6 +1283,15 @@ mod tests {
         assert_eq!(dashboard.today_sales_minor, 500);
         assert_eq!(dashboard.today_orders, 1);
         assert_eq!(dashboard.stock_units, 1);
+        let local_today: String = connection
+            .query_row("SELECT date('now', 'localtime')", [], |row| row.get(0))
+            .expect("read local calendar date");
+        let today_bucket = dashboard
+            .daily_sales
+            .iter()
+            .find(|entry| entry.date == local_today)
+            .expect("dashboard includes the local calendar day");
+        assert_eq!(today_bucket.total_minor, 500);
     }
 
     #[test]
