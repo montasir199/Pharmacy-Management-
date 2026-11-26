@@ -109,16 +109,18 @@ pub struct DashboardSummary {
 }
 
 pub fn dashboard(connection: &Connection) -> Result<DashboardSummary, rusqlite::Error> {
+    // Dashboard "today" follows the workstation's local calendar day. Sale
+    // timestamps are stored in UTC, so convert them before comparing dates.
     let today_sales_minor = connection.query_row(
         "SELECT COALESCE(SUM(total_minor), 0) FROM sales
-         WHERE sold_at >= strftime('%Y-%m-%dT00:00:00.000Z', 'now')
+         WHERE date(sold_at, 'localtime') = date('now', 'localtime')
            AND status = 'paid'",
         [],
         |row| row.get(0),
     )?;
     let today_orders = connection.query_row(
         "SELECT COUNT(*) FROM sales
-         WHERE sold_at >= strftime('%Y-%m-%dT00:00:00.000Z', 'now')
+         WHERE date(sold_at, 'localtime') = date('now', 'localtime')
            AND status != 'cancelled'",
         [],
         |row| row.get(0),
@@ -182,13 +184,13 @@ pub fn dashboard(connection: &Connection) -> Result<DashboardSummary, rusqlite::
     let daily_sales = (0_i64..7)
         .map(|offset| {
             let date: String = connection.query_row(
-                "SELECT strftime('%Y-%m-%d', 'now', ?1)",
+                "SELECT strftime('%Y-%m-%d', 'now', 'localtime', ?1)",
                 [format!("-{offset} days")],
                 |row| row.get(0),
             )?;
             let total_minor = connection.query_row(
                 "SELECT COALESCE(SUM(total_minor), 0) FROM sales
-                 WHERE substr(sold_at, 1, 10) = ?1 AND status = 'paid'",
+                 WHERE date(sold_at, 'localtime') = ?1 AND status = 'paid'",
                 [&date],
                 |row| row.get(0),
             )?;
