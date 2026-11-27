@@ -147,6 +147,39 @@ jobs:
             throw "Could not upload the installer, signed updater archive, and manifest to $tag"
           }
 
+      - name: Verify published updater feed and download assets
+        shell: pwsh
+        run: |
+          $version = (Get-Content src-tauri/tauri.conf.json -Raw | ConvertFrom-Json).version
+          $tag = "v$version"
+          $manifestUrl = "https://github.com/montasir199/Pharmacy-Management-/releases/download/$tag/latest.json"
+          $response = Invoke-WebRequest -Uri $manifestUrl -Method Get
+          if ($response.StatusCode -ne 200) {
+            throw "Published updater manifest returned HTTP $($response.StatusCode)"
+          }
+          $manifest = $response.Content | ConvertFrom-Json
+          if ($manifest.version -ne $version) {
+            throw "Published updater manifest version '$($manifest.version)' does not match app version '$version'"
+          }
+          $platform = $manifest.platforms.'windows-x86_64'
+          if (-not $platform -or
+              [string]::IsNullOrWhiteSpace($platform.url) -or
+              [string]::IsNullOrWhiteSpace($platform.signature) -or
+              -not $platform.url.EndsWith(".nsis.zip")) {
+            throw "Published updater manifest has an invalid Windows x64 updater entry"
+          }
+          $updaterPath = Join-Path $env:RUNNER_TEMP "published-updater.nsis.zip"
+          Invoke-WebRequest -Uri $platform.url -OutFile $updaterPath
+          if ((Get-Item $updaterPath).Length -lt 1000000) {
+            throw "Published updater archive is missing or unexpectedly small"
+          }
+          $installerUrl = "https://github.com/montasir199/Pharmacy-Management-/releases/download/$tag/Dawai.Pharmacy_$($version)_x64-setup.exe"
+          $installerPath = Join-Path $env:RUNNER_TEMP "published-installer.exe"
+          Invoke-WebRequest -Uri $installerUrl -OutFile $installerPath
+          if ((Get-Item $installerPath).Length -lt 1000000) {
+            throw "Published standalone installer is missing or unexpectedly small"
+          }
+
       - name: Upload Windows installer
         uses: actions/upload-artifact@v4
         with:
